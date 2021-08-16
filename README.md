@@ -15,10 +15,13 @@ make test
 google-chrome gcov/index.html
 ```
 
-# Demo - requires libpcap and libndpi
+# Demo
+Requires libpcap and libndpi
 ```
 make demo
+```
 
+```
 Usage:
   demo [OPTION...] - Demonstration of libinetflow
 
