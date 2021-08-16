@@ -168,8 +168,8 @@ static void print_flow(InetFlow * flow, gpointer data)
 
     lip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
     uip = (struct sockaddr_in *)inet_tuple_get_upper(&flow->tuple);
-    inet_ntop(AF_INET, &lip->sin_addr, lips, INET_ADDRSTRLEN);
-    inet_ntop(AF_INET, &uip->sin_addr, uips, INET_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), &lip->sin_addr, lips, INET6_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), &uip->sin_addr, uips, INET6_ADDRSTRLEN);
     g_printf("0x%04x: %-16s %-16s %-2d %-5d %-5d  %-5zu %s %s\n",
              flow->hash, lips, uips, inet_flow_protocol(flow), lip->sin_port, uip->sin_port,
              flow->packets,

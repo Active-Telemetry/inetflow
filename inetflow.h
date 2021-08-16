@@ -56,9 +56,10 @@ struct sockaddr_storage *inet_tuple_get_upper(InetTuple * tuple);
 #define inet_tuple_get_client inet_tuple_get_upper
 gboolean inet_tuple_equal(InetTuple * a, InetTuple * b);
 gboolean inet_tuple_exact(InetTuple * a, InetTuple * b);
+#define inet_tuple_family(tuple) ((struct sockaddr_in *)&(tuple)->src)->sin_family
 #define inet_tuple_get_protocol(tuple) (tuple)->protocol
 #define inet_tuple_set_protocol(tuple, proto) (tuple)->protocol = proto
-guint inet_tuple_hash(InetTuple * t);
+guint inet_tuple_hash(InetTuple * tuple);
 
 /* InetFragList */
 typedef struct _InetFragment {
