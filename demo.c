@@ -27,13 +27,18 @@
 #endif
 #include <glib.h>
 #include <glib/gprintf.h>
+#include <signal.h>
 #include "inetflow.h"
 
 static gboolean dpi = FALSE;
 static gchar *filename = NULL;
+static gchar *iface = NULL;
 static gboolean verbose = FALSE;
 static gint frames = 0;
 static InetFlowTable *table = NULL;
+static gboolean running = true;
+
+#define MAXIMUM_SNAPLEN 262144
 
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
 static struct ndpi_detection_module_struct *module = NULL;
@@ -130,6 +135,31 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     return;
 }
 
+static void process_interface(const char *interface, int snaplen, int promisc, int to_ms)
+{
+    char error_pcap[PCAP_ERRBUF_SIZE] = { 0 };
+    struct pcap_pkthdr hdr;
+    const uint8_t *frame;
+    pcap_t *pcap;
+    int status;
+
+    pcap = pcap_open_live(interface, snaplen, promisc, to_ms, error_pcap);
+    if (pcap == NULL) {
+        g_printf("%s: Failed to open interface: %s\n", interface, error_pcap);
+        return;
+    }
+
+    g_printf("Reading from \"%s\"\n", interface);
+    while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
+        process_frame(frame, hdr.caplen);
+    }
+    pcap_close(pcap);
+
+    g_printf("\nProcessed %d frames," " %" G_GUINT64_FORMAT " misses,"
+             " %" G_GUINT64_FORMAT " hits," " %" G_GUINT32_FORMAT " flows\n",
+             frames, table->misses, table->hits, inet_flow_table_size(table));
+}
+
 static void process_pcap(const char *filename)
 {
     char error_pcap[PCAP_ERRBUF_SIZE];
@@ -144,7 +174,7 @@ static void process_pcap(const char *filename)
     }
 
     g_printf("Reading \"%s\"\n", filename);
-    while ((frame = pcap_next(pcap, &hdr)) != NULL) {
+    while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
         process_frame(frame, hdr.caplen);
     }
     pcap_close(pcap);
@@ -197,12 +227,18 @@ static void clean_flow(InetFlow * flow, gpointer data)
 
 static GOptionEntry entries[] = {
     { "pcap", 'p', 0, G_OPTION_ARG_STRING, &filename, "Pcap file to use", NULL },
+    { "interface", 'i', 0, G_OPTION_ARG_STRING, &iface, "Interface to capture on", NULL },
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
     { "dpi", 'd', 0, G_OPTION_ARG_NONE, &dpi, "Analyse frames using DPI", NULL },
 #endif
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL },
     { NULL }
 };
+
+static void intHandler(int dummy)
+{
+    running = false;
+}
 
 int main(int argc, char **argv)
 {
@@ -218,9 +254,9 @@ int main(int argc, char **argv)
         g_print("ERROR: %s\n", error->message);
         exit(1);
     }
-    if (filename == NULL) {
+    if ((!filename && !iface) || filename && iface) {
         g_print("%s", g_option_context_get_help(context, FALSE, NULL));
-        g_print("ERROR: Require pcap file\n");
+        g_print("ERROR: Require interface or pcap file\n");
         exit(1);
     }
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
@@ -238,8 +274,12 @@ int main(int argc, char **argv)
     }
 #endif
 
+    signal(SIGINT, intHandler);
     table = inet_flow_table_new();
-    process_pcap(filename);
+    if (filename)
+        process_pcap(filename);
+    else
+        process_interface(iface, MAXIMUM_SNAPLEN, 1, 1000);
     g_printf
         ("Hash    lip              uip            prot lport uport  pkts  state  app\n");
     inet_flow_foreach(table, (IFFunc) print_flow, NULL);
