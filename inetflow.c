@@ -1005,6 +1005,10 @@ InetFlow *inet_flow_get_full(InetFlowTable * table,
             insert_flow_by_expiry(table, flow, flow->lifetime);
             flow->timestamp = timestamp ? : get_time_us();
             flow->packets++;
+            if (packet.direction == FLOW_DIRECTION_ORIGINAL)
+                flow->outbytes += length;
+            else if (packet.direction == FLOW_DIRECTION_REPLY)
+                flow->inbytes += length;
         }
         table->hits++;
     } else {
@@ -1032,6 +1036,10 @@ InetFlow *inet_flow_get_full(InetFlowTable * table,
         inet_flow_update(flow, &packet);
         insert_flow_by_expiry(table, flow, flow->lifetime);
         flow->packets++;
+        if (packet.direction == FLOW_DIRECTION_ORIGINAL)
+            flow->outbytes += length;
+        else if (packet.direction == FLOW_DIRECTION_REPLY)
+            flow->inbytes += length;
     }
   exit:
     return flow;

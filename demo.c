@@ -28,11 +28,13 @@
 #include <glib.h>
 #include <glib/gprintf.h>
 #include <signal.h>
+#include <curses.h>
 #include "inetflow.h"
 
 static gboolean dpi = FALSE;
 static gchar *filename = NULL;
 static gchar *iface = NULL;
+static int interval = 1;
 static gboolean verbose = FALSE;
 static gint frames = 0;
 static InetFlowTable *table = NULL;
@@ -51,6 +53,16 @@ typedef struct {
     u_int16_t protocol;
     bool done;
 } ndpi_context;
+
+static void print_flow(InetFlow * flow, gpointer data);
+
+static inline uint64_t
+get_time_us (void)
+{
+    struct timeval tv;
+    gettimeofday (&tv, NULL);
+    return (tv.tv_sec * (uint64_t) 1000000 + tv.tv_usec);
+}
 
 static void ndpi_debug_function(u_int32_t protocol, void *module_struct,
                                 ndpi_log_level_t log_level, const char *format, ...)
@@ -135,6 +147,40 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     return;
 }
 
+static gint compare_flow (InetFlow *a, InetFlow *b)
+{
+    return (b->inbytes + b->outbytes) - (a->inbytes + a->outbytes);
+}
+
+static void collect_flow(InetFlow * flow, gpointer data)
+{
+    GList **list = (GList **)data;
+    *list = g_list_insert_sorted(*list, (gpointer)flow, (GCompareFunc) compare_flow);
+}
+
+static void dump_stats(void)
+{
+    int count = 0;
+    int col, row;
+    GList *flows = NULL;
+
+    getmaxyx(stdscr, row, col);
+    clear();
+    refresh();
+    inet_flow_foreach(table, (IFFunc) collect_flow, &flows);
+    count = 0;
+    g_printf("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
+    for (GList *iter = flows; iter && (count < (row-2)); iter = g_list_next(iter))
+    {
+        InetFlow *flow = (InetFlow *)iter->data;
+        if ((flow->inbytes + flow->outbytes) < 1000)
+            continue;
+        print_flow(flow, NULL);
+        count++;
+    }
+    g_list_free (flows);
+}
+
 static void process_interface(const char *interface, int snaplen, int promisc, int to_ms)
 {
     char error_pcap[PCAP_ERRBUF_SIZE] = { 0 };
@@ -142,6 +188,7 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     const uint8_t *frame;
     pcap_t *pcap;
     int status;
+    uint64_t lasttime = get_time_us();
 
     pcap = pcap_open_live(interface, snaplen, promisc, to_ms, error_pcap);
     if (pcap == NULL) {
@@ -150,9 +197,17 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     }
 
     g_printf("Reading from \"%s\"\n", interface);
+    initscr();
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
         process_frame(frame, hdr.caplen);
+        if (interval && ((get_time_us() - lasttime) / 1000000) > interval)
+        {
+            lasttime = get_time_us();
+            inet_flow_expire (table, lasttime);
+            dump_stats();
+        }
     }
+    endwin();
     pcap_close(pcap);
 
     g_printf("\nProcessed %d frames," " %" G_GUINT64_FORMAT " misses,"
@@ -200,9 +255,9 @@ static void print_flow(InetFlow * flow, gpointer data)
     uip = (struct sockaddr_in *)inet_tuple_get_upper(&flow->tuple);
     inet_ntop(inet_tuple_family(&flow->tuple), &lip->sin_addr, lips, INET6_ADDRSTRLEN);
     inet_ntop(inet_tuple_family(&flow->tuple), &uip->sin_addr, uips, INET6_ADDRSTRLEN);
-    g_printf("0x%04x: %-16s %-16s %-2d %-5d %-5d  %-5zu %s %s\n",
-             flow->hash, lips, uips, inet_flow_protocol(flow), lip->sin_port, uip->sin_port,
-             flow->packets,
+    g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5zu %-7zu %-7zu  %s %s\r\n",
+             flow->hash, uips, lips, inet_flow_protocol(flow), uip->sin_port, lip->sin_port,
+             flow->packets, flow->inbytes, flow->outbytes,
              flow->state == FLOW_NEW ? "NEW   " : (flow->state ==
                                                    FLOW_OPEN ? "OPEN  " : "CLOSED"),
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
@@ -231,6 +286,7 @@ static GOptionEntry entries[] = {
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
     { "dpi", 'd', 0, G_OPTION_ARG_NONE, &dpi, "Analyse frames using DPI", NULL },
 #endif
+    { "timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL },
     { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL },
     { NULL }
 };
@@ -280,8 +336,7 @@ int main(int argc, char **argv)
         process_pcap(filename);
     else
         process_interface(iface, MAXIMUM_SNAPLEN, 1, 1000);
-    g_printf
-        ("Hash    lip              uip            prot lport uport  pkts  state  app\n");
+    g_printf("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
     inet_flow_foreach(table, (IFFunc) print_flow, NULL);
     inet_flow_foreach(table, (IFFunc) clean_flow, NULL);
     inet_flow_table_unref(table);

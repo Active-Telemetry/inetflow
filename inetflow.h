@@ -93,6 +93,8 @@ typedef struct _InetFlow {
     guint32 server_ip[4];
     InetTuple tuple;
     gpointer context;
+    guint64 inbytes;
+    guint64 outbytes;
 } InetFlow;
 
 #define inet_flow_protocol(flow) flow->tuple.protocol

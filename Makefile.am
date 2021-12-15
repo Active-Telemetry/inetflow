@@ -25,7 +25,7 @@ demo_CFLAGS = $(libinetflow_la_CFLAGS) @PCAP_CFLAGS@ @NDPI_CFLAGS@
 if USE_NDPI
 demo_CFLAGS += -DLIBNDPI_NEWEST_API
 endif
-demo_LDADD = @PCAP_LIBS@ @NDPI_LIBS@ $(libinetflow_la_LIBADD) $(lib_LTLIBRARIES)
+demo_LDADD = @PCAP_LIBS@ @NDPI_LIBS@ $(libinetflow_la_LIBADD) $(lib_LTLIBRARIES) @NCURSES_LIBS@
 
 unittest_SOURCES = test.c
 unittest_CFLAGS = $(libinetflow_la_CFLAGS) -g -fprofile-arcs -fprofile-dir=gcov -ftest-coverage
