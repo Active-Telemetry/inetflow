@@ -20,6 +20,7 @@
 #include <signal.h>
 #include <pcap.h>
 #include <curses.h>
+#include "inetflow.h"
 
 static gchar *iface = NULL;
 static gchar *filename = NULL;
@@ -75,15 +76,58 @@ typedef struct subnet {
 
 static GList *private_subnets = NULL;
 
+typedef struct host {
+    char name[INET6_ADDRSTRLEN];
+    unsigned long bytes;
+} host;
+
+static GHashTable* host_htable = NULL;
+
 static bool
-is_local_v4(void)
+is_local_v4(struct sockaddr_storage *ss)
 {
+    //TODO
     // unsigned int mask = 0xFFFFFFFF << (32 - network_bits);
+    char lips[INET6_ADDRSTRLEN];
+    inet_ntop(((struct sockaddr_in *)ss)->sin_family, &((struct sockaddr_in *)ss)->sin_addr, lips, INET6_ADDRSTRLEN);
+    if (strncmp(lips, "192.168.", 8) == 0)
+        return TRUE;
+    return FALSE;
+}
+
+static void update_host(InetTuple *tuple, uint32_t bytes)
+{
+    int family = inet_tuple_family(tuple);
+    char lips[INET6_ADDRSTRLEN];
+    char hostname[INET6_ADDRSTRLEN];
+    struct sockaddr_in *ip;
+    host *h;
+
+    if (is_local_v4(&tuple->src))
+        ip = (struct sockaddr_in *) &tuple->src;
+    else if (is_local_v4(&tuple->dst))
+        ip = (struct sockaddr_in *) &tuple->dst;
+    else
+        return;
+    inet_ntop(family, &ip->sin_addr, lips, INET6_ADDRSTRLEN);
+
+    h = g_hash_table_lookup(host_htable, lips);
+    if (!h) {
+        h = g_malloc0(sizeof(host));
+        if (getnameinfo((const struct sockaddr *)ip, sizeof(*ip), h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
+            strncpy(h->name, lips, INET6_ADDRSTRLEN);
+        }
+        h->bytes = bytes;
+        g_hash_table_insert(host_htable, g_strdup(lips), h);
+    } else {
+        h->bytes += bytes;
+    }
 }
 
 static void process_frame(const uint8_t * frame, uint32_t length)
 {
     ethernet_hdr_t *eth = (ethernet_hdr_t *)frame;
+    InetTuple tuple = {0};
 
     frames++;
     switch (ntohs(eth->protocol))
@@ -92,10 +136,14 @@ static void process_frame(const uint8_t * frame, uint32_t length)
         arp++;
         break;
     case ETH_PROTOCOL_IP:
-        ipv4++;
-        break;
     case ETH_PROTOCOL_IPV6:
-        ipv6++;
+        if (inet_flow_parse_ip((const guint8 *)(eth + 1), length - sizeof(ethernet_hdr_t), NULL, &tuple, FALSE)) {
+            update_host(&tuple, length);
+            if (inet_tuple_family(&tuple) == AF_INET)
+                ipv4++;
+            else
+                ipv6++;
+        }
         break;
     default:
         unknown++;
@@ -103,9 +151,28 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     }
 }
 
+static void dump_host(gpointer key, gpointer value, gpointer user_data)
+{
+    host *h = (host *)value;
+    if (h->bytes)
+        g_printf("host: %s (%s) %lu bytes\r\n", h->name, (char *) key, h->bytes);
+}
+
 static void dump_state(void)
 {
     g_printf("\r\n%8d frames (ARP:%d IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, arp, ipv4, ipv6, unknown);
+    g_hash_table_foreach(host_htable, dump_host, NULL);
+}
+
+static void clear_host(gpointer key, gpointer value, gpointer user_data)
+{
+    host *h = (host *)value;
+    h->bytes = 0;
+}
+
+static void clear_state(void)
+{
+    g_hash_table_foreach(host_htable, clear_host, NULL);
 }
 
 static void process_interface(const char *interface, int snaplen, int promisc, int to_ms)
@@ -136,6 +203,7 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
             clear();
             refresh();
             dump_state();
+            clear_state();
         }
     }
     endwin();
@@ -242,6 +310,7 @@ int main(int argc, char **argv)
         exit(1);
     }
     parse_private_networks(private);
+    host_htable = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
 
     signal(SIGINT, intHandler);
     if (filename)
@@ -249,6 +318,7 @@ int main(int argc, char **argv)
     else
         process_interface(iface, MAXIMUM_SNAPLEN, 1, 1000);
 
+    g_hash_table_destroy(host_htable);
     g_option_context_free(context);
     return 0;
 }
