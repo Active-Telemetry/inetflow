@@ -18,7 +18,11 @@ include_HEADERS = inetflow.h
 pkgconfigdir = $(libdir)/pkgconfig
 pkgconfig_DATA = inetflow.pc
 
-EXTRA_PROGRAMS = unittest demo
+EXTRA_PROGRAMS = unittest demo inetmon
+
+inetmon_SOURCES = inetmon.c
+inetmon_CFLAGS = $(libinetflow_la_CFLAGS) @PCAP_CFLAGS@
+inetmon_LDADD = @PCAP_LIBS@ $(libinetflow_la_LIBADD) $(lib_LTLIBRARIES) @NCURSES_LIBS@
 
 demo_SOURCES = demo.c
 demo_CFLAGS = $(libinetflow_la_CFLAGS) @PCAP_CFLAGS@ @NDPI_CFLAGS@
