@@ -18,6 +18,9 @@
 #include <glib.h>
 #include <glib/gprintf.h>
 #include <signal.h>
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <netdb.h>
 #include <pcap.h>
 #include <curses.h>
 #include "inetflow.h"
@@ -33,33 +36,9 @@ static gboolean running = TRUE;
 
 /* Counters */
 static gint frames = 0;
-static gint arp = 0;
 static gint ipv4 = 0;
 static gint ipv6 = 0;
 static gint unknown = 0;
-
-#define ETH_PROTOCOL_ARP        0x0806
-#define ETH_PROTOCOL_IP         0x0800
-#define ETH_PROTOCOL_IPV6       0x86DD
-
-typedef struct ethernet_hdr_t {
-    uint8_t destination[6];
-    uint8_t source[6];
-    uint16_t protocol;
-} __attribute__ ((packed)) ethernet_hdr_t;
-
-typedef struct ip_hdr_t {
-    uint8_t ihl_version;
-    uint8_t tos;
-    uint16_t tot_len;
-    uint16_t id;
-    uint16_t frag_off;
-    uint8_t ttl;
-    uint8_t protocol;
-    uint16_t check;
-    uint32_t saddr;
-    uint32_t daddr;
-} __attribute__ ((packed)) ip_hdr_t;
 
 #define MAXIMUM_SNAPLEN 262144
 
@@ -131,28 +110,17 @@ static void update_host(InetTuple *tuple, uint32_t bytes)
 
 static void process_frame(const uint8_t * frame, uint32_t length)
 {
-    ethernet_hdr_t *eth = (ethernet_hdr_t *)frame;
     InetTuple tuple = {0};
 
     frames++;
-    switch (ntohs(eth->protocol))
-    {
-    case ETH_PROTOCOL_ARP:
-        arp++;
-        break;
-    case ETH_PROTOCOL_IP:
-    case ETH_PROTOCOL_IPV6:
-        if (inet_flow_parse_ip((const guint8 *)(eth + 1), length - sizeof(ethernet_hdr_t), NULL, &tuple, FALSE)) {
-            update_host(&tuple, length);
-            if (inet_tuple_family(&tuple) == AF_INET)
-                ipv4++;
-            else
-                ipv6++;
-        }
-        break;
-    default:
+    if (inet_flow_parse(frame, length, NULL, &tuple, FALSE) && (inet_tuple_family(&tuple) == AF_INET || inet_tuple_family(&tuple) == AF_INET6)) {
+        update_host(&tuple, length);
+        if (inet_tuple_family(&tuple) == AF_INET)
+            ipv4++;
+        else
+            ipv6++;
+    } else {
         unknown++;
-        break;
     }
 }
 
@@ -174,7 +142,7 @@ static void dump_host(gpointer key, gpointer value, gpointer user_data)
 
 static void dump_state(void)
 {
-    g_printf("\r\n%8d frames (ARP:%d IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, arp, ipv4, ipv6, unknown);
+    g_printf("\r\n%8d frames (IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, ipv4, ipv6, unknown);
     g_hash_table_foreach(host_htable, dump_host, NULL);
     if (db_host)
         ic_push();
