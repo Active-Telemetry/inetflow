@@ -20,7 +20,7 @@ pkgconfig_DATA = inetflow.pc
 
 EXTRA_PROGRAMS = unittest demo inetmon
 
-inetmon_SOURCES = inetmon.c
+inetmon_SOURCES = inetmon.c ic.c
 inetmon_CFLAGS = $(libinetflow_la_CFLAGS) @PCAP_CFLAGS@
 inetmon_LDADD = @PCAP_LIBS@ $(libinetflow_la_LIBADD) $(lib_LTLIBRARIES) @NCURSES_LIBS@
 

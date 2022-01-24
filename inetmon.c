@@ -21,10 +21,13 @@
 #include <pcap.h>
 #include <curses.h>
 #include "inetflow.h"
+#include "ic.h"
 
 static gchar *iface = NULL;
 static gchar *filename = NULL;
 static gchar *private = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16";
+static gchar *db_host = NULL;
+static gchar *db_name = "inetmon";
 static int interval = 1;
 static gboolean running = TRUE;
 
@@ -78,7 +81,8 @@ static GList *private_subnets = NULL;
 
 typedef struct host {
     char name[INET6_ADDRSTRLEN];
-    unsigned long bytes;
+    unsigned long inbytes;
+    unsigned long outbytes;
 } host;
 
 static GHashTable* host_htable = NULL;
@@ -117,11 +121,12 @@ static void update_host(InetTuple *tuple, uint32_t bytes)
         if (getnameinfo((const struct sockaddr *)ip, sizeof(*ip), h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
             strncpy(h->name, lips, INET6_ADDRSTRLEN);
         }
-        h->bytes = bytes;
         g_hash_table_insert(host_htable, g_strdup(lips), h);
-    } else {
-        h->bytes += bytes;
     }
+    if (ip == (struct sockaddr_in *) &tuple->src)
+        h->outbytes += bytes;
+    else
+        h->inbytes += bytes;
 }
 
 static void process_frame(const uint8_t * frame, uint32_t length)
@@ -154,20 +159,32 @@ static void process_frame(const uint8_t * frame, uint32_t length)
 static void dump_host(gpointer key, gpointer value, gpointer user_data)
 {
     host *h = (host *)value;
-    if (h->bytes)
-        g_printf("host: %s (%s) %lu bytes\r\n", h->name, (char *) key, h->bytes);
+    if (h->inbytes || h->outbytes)
+        g_printf("host: %s (%s) %lu in %lu out\r\n", h->name, (char *) key, h->inbytes, h->outbytes);
+    if (db_host) {
+        char *tags = g_strdup_printf("host=%s", h->name);
+        ic_tags(tags);
+        free(tags);
+        ic_measure("traffic");
+        ic_long("inbytes", h->inbytes);
+        ic_long("outbytes", h->outbytes);
+        ic_measureend();
+    }
 }
 
 static void dump_state(void)
 {
     g_printf("\r\n%8d frames (ARP:%d IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, arp, ipv4, ipv6, unknown);
     g_hash_table_foreach(host_htable, dump_host, NULL);
+    if (db_host)
+        ic_push();
 }
 
 static void clear_host(gpointer key, gpointer value, gpointer user_data)
 {
     host *h = (host *)value;
-    h->bytes = 0;
+    h->inbytes = 0;
+    h->outbytes = 0;
 }
 
 static void clear_state(void)
@@ -282,6 +299,8 @@ static GOptionEntry entries[] = {
     { "interface", 'i', 0, G_OPTION_ARG_STRING, &iface, "Interface to capture on", NULL },
     { "timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL },
     { "private", 'p', 0, G_OPTION_ARG_STRING, &private, "Private Subnets (defaults to \"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\")", NULL },
+    { "db_host", 'd', 0, G_OPTION_ARG_STRING, &db_host, "InfluxDB database hostname", NULL },
+    { "db_name", 'n', 0, G_OPTION_ARG_STRING, &db_name, "InfluxDB database name (defaults to \"inetmon\"", NULL },
     { NULL }
 };
 
@@ -311,6 +330,10 @@ int main(int argc, char **argv)
     }
     parse_private_networks(private);
     host_htable = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+    if (db_host) {
+        // ic_debug(1);
+        ic_influx_database(db_host, 8086, db_name);
+    }
 
     signal(SIGINT, intHandler);
     if (filename)
