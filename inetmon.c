@@ -33,6 +33,7 @@ static gchar *db_host = NULL;
 static gchar *db_name = "inetmon";
 static int interval = 1;
 static gboolean running = TRUE;
+static gboolean quiet = FALSE;
 
 /* Counters */
 static gint frames = 0;
@@ -127,7 +128,7 @@ static void process_frame(const uint8_t * frame, uint32_t length)
 static void dump_host(gpointer key, gpointer value, gpointer user_data)
 {
     host *h = (host *)value;
-    if (h->inbytes || h->outbytes)
+    if (!quiet && (h->inbytes || h->outbytes))
         g_printf("host: %s (%s) %lu in %lu out\r\n", h->name, (char *) key, h->inbytes, h->outbytes);
     if (db_host) {
         char *tags = g_strdup_printf("host=%s", h->name);
@@ -142,7 +143,8 @@ static void dump_host(gpointer key, gpointer value, gpointer user_data)
 
 static void dump_state(void)
 {
-    g_printf("\r\n%8d frames (IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, ipv4, ipv6, unknown);
+    if (!quiet)
+        g_printf("\r\n%8d frames (IPv4:%d IPv6:%d Unknown:%d)\r\n", frames, ipv4, ipv6, unknown);
     g_hash_table_foreach(host_htable, dump_host, NULL);
     if (db_host)
         ic_push();
@@ -178,20 +180,25 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
 
     g_printf("Reading from \"%s\"\r\n", interface);
     lasttime = get_time_us();
-    initscr();
-    getmaxyx(stdscr, row, col);
+    if (!quiet) {
+        initscr();
+        getmaxyx(stdscr, row, col);
+    }
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
         process_frame(frame, hdr.caplen);
         if (interval && ((get_time_us() - lasttime) / 1000000) > interval)
         {
             lasttime = get_time_us();
-            clear();
-            refresh();
+            if (!quiet) {
+                clear();
+                refresh();
+            }
             dump_state();
             clear_state();
         }
     }
-    endwin();
+    if (!quiet)
+        endwin();
     dump_state();
     pcap_close(pcap);
 }
@@ -263,6 +270,7 @@ parse_private_networks(const gchar *private)
 }
 
 static GOptionEntry entries[] = {
+    { "quiet", 'q', 0, G_OPTION_ARG_NONE, &quiet, "Quiet", NULL },
     { "filename", 'f', 0, G_OPTION_ARG_STRING, &filename, "Pcap file to use", NULL },
     { "interface", 'i', 0, G_OPTION_ARG_STRING, &iface, "Interface to capture on", NULL },
     { "timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL },

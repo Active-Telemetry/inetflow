@@ -1,10 +1,11 @@
 # docker build -t inetmon .
-# docker run -it --net=host -e ARGS='-i eno1 -d 192.168.1.4' inetmon
+# docker run -it --net=host -e ARGS='-q -i eno1 -d 192.168.1.4' inetmon
 FROM ubuntu:20.04
 
 RUN apt-get update -y
 RUN apt-get install -y \
   libglib2.0-0 \
+  libncurses5 \
   libncurses6 \
   libpcap-dev
 
