@@ -86,7 +86,7 @@ typedef struct _InetFlow {
     guint64 packets;
     InetFlowState state;
     guint family;
-    guint16 hash;
+    guint32 hash;
     guint16 flags;
     guint8 direction;
     guint16 server_port;

@@ -712,7 +712,7 @@ static gboolean flow_parse_ipv6(InetTuple * f, const guint8 * data, guint32 leng
 }
 
 static gboolean flow_parse_ip(InetTuple * f, const guint8 * data, guint32 length,
-                              guint16 hash, InetFragList * fragments,
+                              InetFragList * fragments,
                               const uint8_t ** iphr, guint64 ts, guint16 * flags,
                               gboolean tunnel)
 {
@@ -742,12 +742,12 @@ InetTuple *inet_flow_parse_ip(const guint8 * iphdr, guint length, InetFragList *
 {
     if (!result)
         result = calloc(1, sizeof(InetTuple));
-    flow_parse_ip(result, iphdr, length, 0, fragments, NULL, 0, NULL, inspect_tunnel);
+    flow_parse_ip(result, iphdr, length, fragments, NULL, 0, NULL, inspect_tunnel);
     return result;
 }
 
 static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
-                           guint16 hash, InetFragList * fragments, const uint8_t ** iphr,
+                           InetFragList * fragments, const uint8_t ** iphr,
                            guint64 ts, guint16 * flags, gboolean tunnel)
 {
     ethernet_hdr_t *e;
@@ -803,7 +803,7 @@ static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
         goto try_again;
     case ETH_PROTOCOL_IP:
     case ETH_PROTOCOL_IPV6:
-        if (!flow_parse_ip(f, data, length, hash, fragments, iphr, ts, flags, tunnel))
+        if (!flow_parse_ip(f, data, length, fragments, iphr, ts, flags, tunnel))
             return FALSE;
         break;
     case ETH_PROTOCOL_PPPOE_SESS:
@@ -983,13 +983,13 @@ InetFlow *inet_flow_get_full(InetFlowTable * table,
 
     if (l2) {
         if (!flow_parse
-            (tuple, frame, length, hash, table->frag_info_list, iphr, timestamp,
+            (tuple, frame, length, table->frag_info_list, iphr, timestamp,
              &packet.flags, inspect_tunnel)) {
             goto exit;
         }
     } else
         if (!flow_parse_ip
-            (tuple, frame, length, hash, table->frag_info_list, iphr, timestamp,
+            (tuple, frame, length, table->frag_info_list, iphr, timestamp,
              &packet.flags, inspect_tunnel)) {
         goto exit;
     }
@@ -1088,7 +1088,7 @@ static void inet_flow_table_init(InetFlowTable * table)
 
     table->table =
         g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare, NULL,
-                              (GDestroyNotify) inet_flow_table_unref);
+                              (GDestroyNotify) inet_flow_unref);
     table->frag_info_list = inet_frag_list_new();
 
     for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
@@ -1124,7 +1124,7 @@ InetTuple *inet_flow_parse(const guint8 * frame, guint length, InetFragList * fr
 {
     if (!result)
         result = calloc(1, sizeof(InetTuple));
-    flow_parse(result, frame, length, 0, fragments, NULL, 0, NULL, inspect_tunnel);
+    flow_parse(result, frame, length, fragments, NULL, 0, NULL, inspect_tunnel);
     return result;
 }
 
