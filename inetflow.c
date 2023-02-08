@@ -536,6 +536,7 @@ static gboolean flow_parse_ipv4(InetTuple * f, const guint8 * data, guint32 leng
     DEBUG("Protocol: %d\n", iph->protocol);
     inet_tuple_set_protocol(f, iph->protocol);
 
+    f->offset += sizeof(ip_hdr_t);
     /* Don't bother with this for non-first fragments */
     if ((GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0) {
         switch (iph->protocol) {
@@ -606,6 +607,7 @@ static gboolean flow_parse_ipv6(InetTuple * f, const guint8 * data, guint32 leng
 
     data += sizeof(ip6_hdr_t);
     length -= sizeof(ip6_hdr_t);
+    f->offset += sizeof(ip6_hdr_t);
 
   next_header:
     DEBUG("Next Header: %u\n", inet_tuple_get_protocol(f));
@@ -771,6 +773,7 @@ static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
     e = (ethernet_hdr_t *) data;
     data += sizeof(ethernet_hdr_t);
     length -= sizeof(ethernet_hdr_t);
+    f->offset += sizeof(ethernet_hdr_t);
     type = GUINT16_FROM_BE(e->protocol);
   try_again:
     switch (type) {
@@ -785,6 +788,7 @@ static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
         type = GUINT16_FROM_BE(v->protocol);
         data += sizeof(vlan_hdr_t);
         length -= sizeof(vlan_hdr_t);
+        f->offset += sizeof(vlan_hdr_t);
         goto try_again;
     case ETH_PROTOCOL_MPLS_UC:
     case ETH_PROTOCOL_MPLS_MC:
@@ -796,6 +800,7 @@ static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
         label = GUINT32_FROM_BE(*((guint32 *) data));
         data += sizeof(guint32);
         length -= sizeof(guint32);
+        f->offset += sizeof(guint32);
         if ((label & 0x100) != 0x100)
             type = ETH_PROTOCOL_MPLS_UC;
         else
@@ -820,6 +825,7 @@ static gboolean flow_parse(InetTuple * f, const guint8 * data, guint32 length,
         }
         data += sizeof(pppoe_sess_hdr_t);
         length -= sizeof(pppoe_sess_hdr_t);
+        f->offset += sizeof(pppoe_sess_hdr_t);
         goto try_again;
     default:
         DEBUG("Unsupported ethernet protocol: 0x%04x\n", type);
