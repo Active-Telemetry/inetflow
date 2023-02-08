@@ -32,16 +32,15 @@ endif
 demo_LDADD = @PCAP_LIBS@ @NDPI_LIBS@ $(libinetflow_la_LIBADD) $(lib_LTLIBRARIES) @NCURSES_LIBS@
 
 unittest_SOURCES = test.c
-unittest_CFLAGS = $(libinetflow_la_CFLAGS) -g -fprofile-arcs -fprofile-dir=gcov -ftest-coverage
+unittest_CFLAGS = $(libinetflow_la_CFLAGS) -g -fno-inline -fprofile-arcs -ftest-coverage
 unittest_LDADD = $(libinetflow_la_LIBADD)
 
 test: unittest
 	@echo "Running unit tests"
 	$(Q)mkdir -p gcov
 	$(Q)G_SLICE=always-malloc VALGRIND_OPTS=--suppressions=valgrind.supp valgrind --leak-check=full ./unittest 2>&1
-	$(Q)mv *.gcno gcov/
-	$(Q)lcov -q --capture --directory . --output-file gcov/coverage.info
-	$(Q)genhtml -q gcov/coverage.info --output-directory gcov
+	$(Q)lcov -q --capture --directory . --output-file coverage.info
+	$(Q)genhtml -q coverage.info --output-directory gcov
 
 indent:
 	indent -kr -ncs -nut -l92 *.c *.h
