@@ -22,9 +22,9 @@ static InetTuple _test_tuple;
 static InetTuple *test_tuple = &_test_tuple;
 #define MAX_BUFFER_SIZE     1600
 
-#define _TEST_SPORT 0x1111
+#define _TEST_SPORT 0x1234
 uint16_t TEST_SPORT = _TEST_SPORT;
-#define _TEST_DPORT 0x2222
+#define _TEST_DPORT 0x4321
 uint16_t TEST_DPORT = _TEST_DPORT;
 #define _TEST_SADDR 0x12345678
 uint32_t TEST_SADDR = _TEST_SADDR;
@@ -1056,10 +1056,6 @@ gchar *num_to_string(guint8 * number, int family)
 
 void test_flow_properties()
 {
-    /* Original values converted to network byte order */
-    guint saddr = htonl(TEST_SADDR);
-    guint daddr = htonl(TEST_DADDR);
-
     InetFlowTable *table;
     InetFlow *flow;
     struct sockaddr_in *lip;
@@ -1092,9 +1088,9 @@ void test_flow_properties()
     g_assert_nonnull(uip);
     g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin_port, ==, TEST_SPORT);
-    g_assert_cmpuint(sip->sin_port, ==, TEST_SPORT);
-    g_assert_cmpuint(uip->sin_port, ==, TEST_DPORT);
+    g_assert_cmpuint(lip->sin_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(sip->sin_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(uip->sin_port, ==, htons(TEST_DPORT));
 
     g_assert(((struct sockaddr_in *)lip)->sin_addr.s_addr == htonl(TEST_SADDR));
     g_assert(((struct sockaddr_in *)sip)->sin_addr.s_addr == htonl(TEST_SADDR));
@@ -1106,10 +1102,6 @@ void test_flow_properties()
 
 void test_flow_properties_reversed()
 {
-    /* Addresses in network order */
-    guint saddr = htonl(TEST_SADDR);
-    guint daddr = htonl(TEST_DADDR);
-
     InetFlowTable *table;
     InetFlow *flow;
     struct sockaddr_in *lip;
@@ -1142,9 +1134,9 @@ void test_flow_properties_reversed()
     g_assert_nonnull(uip);
     g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin_port, ==, TEST_SPORT);
-    g_assert_cmpuint(sip->sin_port, ==, TEST_SPORT);
-    g_assert_cmpuint(uip->sin_port, ==, TEST_DPORT);
+    g_assert_cmpuint(lip->sin_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(sip->sin_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(uip->sin_port, ==, htons(TEST_DPORT));
 
     g_assert(lip->sin_addr.s_addr == htonl(TEST_SADDR));
     g_assert(sip->sin_addr.s_addr == htonl(TEST_SADDR));
@@ -1188,9 +1180,9 @@ void test_flow_properties_ipv6()
     g_assert_nonnull(uip);
     g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin6_port, ==, TEST_SPORT);
-    g_assert_cmpuint(lip->sin6_port, ==, TEST_SPORT);
-    g_assert_cmpuint(uip->sin6_port, ==, TEST_DPORT);
+    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(uip->sin6_port, ==, htons(TEST_DPORT));
 
     g_assert(memcmp(&lip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
     g_assert(memcmp(&sip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
@@ -1235,9 +1227,9 @@ void test_flow_properties_ipv6_reversed()
     g_assert_nonnull(uip);
     g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin6_port, ==, TEST_SPORT);
-    g_assert_cmpuint(sip->sin6_port, ==, TEST_SPORT);
-    g_assert_cmpuint(uip->sin6_port, ==, TEST_DPORT);
+    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(sip->sin6_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(uip->sin6_port, ==, htons(TEST_DPORT));
 
     g_assert(memcmp(&lip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
     g_assert(memcmp(&sip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);

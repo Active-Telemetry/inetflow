@@ -199,8 +199,8 @@ static int sock_address_comparison(struct sockaddr_storage *a, struct sockaddr_s
 
 struct sockaddr_storage *inet_tuple_get_lower(InetTuple * tuple)
 {
-    guint16 sport = ((struct sockaddr_in *)&tuple->src)->sin_port;
-    guint16 dport = ((struct sockaddr_in *)&tuple->dst)->sin_port;
+    guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
+    guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
     if (sport < dport ||
         (sport == 0 && dport == 0 && sock_address_comparison(&tuple->src, &tuple->dst) < 0))
         return &tuple->src;
@@ -210,8 +210,8 @@ struct sockaddr_storage *inet_tuple_get_lower(InetTuple * tuple)
 
 struct sockaddr_storage *inet_tuple_get_upper(InetTuple * tuple)
 {
-    guint16 sport = ((struct sockaddr_in *)&tuple->src)->sin_port;
-    guint16 dport = ((struct sockaddr_in *)&tuple->dst)->sin_port;
+    guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
+    guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
     if (dport > sport ||
         (dport == 0 && sport == 0 && sock_address_comparison(&tuple->dst, &tuple->src) > 0))
         return &tuple->dst;
@@ -275,9 +275,9 @@ guint inet_tuple_hash(InetTuple * tuple)
     struct sockaddr_storage *lower = inet_tuple_get_lower(tuple);
     struct sockaddr_storage *upper = inet_tuple_get_upper(tuple);
 
-    tuple->hash =
-        ((struct sockaddr_in *)lower)->
-        sin_port << 16 | ((struct sockaddr_in *)upper)->sin_port;
+    guint16 lport = GUINT16_FROM_BE(((struct sockaddr_in *)lower)->sin_port);
+    guint16 uport = GUINT16_FROM_BE(((struct sockaddr_in *)upper)->sin_port);
+    tuple->hash = lport << 16 | uport;
 
     return tuple->hash;
 }
@@ -436,11 +436,9 @@ static gboolean flow_parse_tcp(InetTuple * f, const guint8 * data, guint32 lengt
     tcp_hdr_t *tcp = (tcp_hdr_t *) data;
     if (length < sizeof(tcp_hdr_t))
         return FALSE;
-    guint16 sport = GUINT16_FROM_BE(tcp->source);
-    guint16 dport = GUINT16_FROM_BE(tcp->destination);
 
-    ((struct sockaddr_in *)&f->src)->sin_port = sport;
-    ((struct sockaddr_in *)&f->dst)->sin_port = dport;
+    ((struct sockaddr_in *)&f->src)->sin_port = tcp->source;
+    ((struct sockaddr_in *)&f->dst)->sin_port = tcp->destination;
 
     if (flags) {
         *flags = GUINT16_FROM_BE(tcp->flags);
@@ -453,11 +451,9 @@ static gboolean flow_parse_udp(InetTuple * f, const guint8 * data, guint32 lengt
     udp_hdr_t *udp = (udp_hdr_t *) data;
     if (length < sizeof(udp_hdr_t))
         return FALSE;
-    guint16 sport = GUINT16_FROM_BE(udp->source);
-    guint16 dport = GUINT16_FROM_BE(udp->destination);
 
-    ((struct sockaddr_in *)&f->src)->sin_port = sport;
-    ((struct sockaddr_in *)&f->dst)->sin_port = dport;
+    ((struct sockaddr_in *)&f->src)->sin_port = udp->source;
+    ((struct sockaddr_in *)&f->dst)->sin_port = udp->destination;
 
     return TRUE;
 }
@@ -467,11 +463,9 @@ static gboolean flow_parse_sctp(InetTuple * f, const guint8 * data, guint32 leng
     sctp_hdr_t *sctp = (sctp_hdr_t *) data;
     if (length < sizeof(sctp_hdr_t))
         return FALSE;
-    guint16 sport = GUINT16_FROM_BE(sctp->source);
-    guint16 dport = GUINT16_FROM_BE(sctp->destination);
 
-    ((struct sockaddr_in *)&f->src)->sin_port = sport;
-    ((struct sockaddr_in *)&f->dst)->sin_port = dport;
+    ((struct sockaddr_in *)&f->src)->sin_port = sctp->source;
+    ((struct sockaddr_in *)&f->dst)->sin_port = sctp->destination;
 
     return TRUE;
 }
