@@ -2356,6 +2356,438 @@ void test_flow_nomatch_port()
     inet_flow_table_unref(table);
 }
 
+void test_tuple_exact()
+{
+    InetTuple a, b;
+
+    setup_test();
+    make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert(flow_parse(&a, test_buffer, MAX_BUFFER_SIZE, NULL, NULL, 0, NULL, FALSE));
+    b = a;
+    g_assert_true(inet_tuple_exact(&a, &b));
+
+    /* The same addresses in the other direction */
+    make_pkt_reverse(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    memset(&b, 0, sizeof(b));
+    g_assert(flow_parse(&b, test_buffer, MAX_BUFFER_SIZE, NULL, NULL, 0, NULL, FALSE));
+    g_assert_false(inet_tuple_exact(&a, &b));
+    g_assert_true(inet_tuple_equal(&a, &b));
+
+    /* Another protocol */
+    b = a;
+    b.protocol = IP_PROTOCOL_TCP;
+    g_assert_false(inet_tuple_exact(&a, &b));
+
+    /* Another destination address */
+    b = a;
+    ((struct sockaddr_in *)&b.dst)->sin_addr.s_addr ^= 1;
+    g_assert_false(inet_tuple_exact(&a, &b));
+}
+
+/* Build an IPv4 GRE frame with the given GRE flags and an inner UDP packet */
+static guint make_pkt_gre_flags(guint8 * buffer, guint16 gre_flags, guint16 inner_protocol)
+{
+    guint8 *p = build_hdr_eth(buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ip(p, ETH_PROTOCOL_IP, IP_PROTOCOL_GRE, FALSE);
+    gre_hdr_t *gre = (gre_hdr_t *) p;
+    p = build_hdr_gre(p, inner_protocol, FALSE);
+    gre->flags_version = g_htons(gre_flags);
+    /* Checksum and offset, key, and sequence number words */
+    memset(p, 0xff, 12);
+    p += ((gre_flags & (GRE_HEADER_CSUM | GRE_HEADER_ROUTING)) ? 4 : 0) +
+        ((gre_flags & GRE_HEADER_KEY) ? 4 : 0) + ((gre_flags & GRE_HEADER_SEQ) ? 4 : 0);
+    p = build_hdr_ip(p, inner_protocol, IP_PROTOCOL_UDP, FALSE);
+    p = build_hdr_udp(p, FALSE);
+    return (guint) (p - buffer);
+}
+
+void test_flow_parse_gre_options()
+{
+    guint16 flags[] = { GRE_HEADER_CSUM, GRE_HEADER_KEY, GRE_HEADER_SEQ,
+        GRE_HEADER_CSUM | GRE_HEADER_KEY | GRE_HEADER_SEQ
+    };
+    guint16 protocols[] = { ETH_PROTOCOL_IP, ETH_PROTOCOL_IPV6 };
+    guint len;
+    int i, j;
+
+    for (i = 0; i < G_N_ELEMENTS(flags); i++) {
+        for (j = 0; j < G_N_ELEMENTS(protocols); j++) {
+            setup_test();
+            len = make_pkt_gre_flags(test_buffer, flags[i], protocols[j]);
+            g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, TRUE));
+            g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, IP_PROTOCOL_UDP);
+            g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->src)->sin_port, ==,
+                             htons(TEST_SPORT));
+
+            /* The inner packet ends inside its transport header */
+            g_assert_false(flow_parse
+                           (test_tuple, test_buffer, len - 4, NULL, NULL, 0, NULL, TRUE));
+        }
+    }
+}
+
+/* Build an IPv6 frame that carries an IPv4 or IPv6 packet */
+static guint make_pkt_in_ipv6(guint8 * buffer, guint inner_ip_protocol)
+{
+    guint8 *p = build_hdr_eth(buffer, ETH_PROTOCOL_IPV6);
+    p = build_hdr_ipv6(p, inner_ip_protocol, FALSE);
+    if (inner_ip_protocol == IP_PROTOCOL_IPV4)
+        p = build_hdr_ipv4(p, IP_PROTOCOL_UDP, FALSE);
+    else
+        p = build_hdr_ipv6(p, IP_PROTOCOL_UDP, FALSE);
+    p = build_hdr_udp(p, FALSE);
+    return (guint) (p - buffer);
+}
+
+void test_flow_parse_ip_in_ipv6()
+{
+    guint inner[] = { IP_PROTOCOL_IPV4, IP_PROTOCOL_IPV6 };
+    guint len;
+    int i;
+
+    for (i = 0; i < G_N_ELEMENTS(inner); i++) {
+        setup_test();
+        len = make_pkt_in_ipv6(test_buffer, inner[i]);
+
+        /* With tunnel inspection the tuple is the inner packet */
+        g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, TRUE));
+        g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, IP_PROTOCOL_UDP);
+        g_assert_cmpuint(inet_tuple_family(test_tuple), ==,
+                         inner[i] == IP_PROTOCOL_IPV4 ? AF_INET : AF_INET6);
+
+        /* The inner packet ends inside its transport header */
+        g_assert_false(flow_parse(test_tuple, test_buffer, len - 4, NULL, NULL, 0, NULL, TRUE));
+
+        /* Without tunnel inspection the tuple is the outer packet */
+        memset(test_tuple, 0, sizeof(*test_tuple));
+        g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, FALSE));
+        g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, inner[i]);
+    }
+}
+
+void test_flow_get_full_iphr()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    const uint8_t *iph = NULL;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                        &iph, NULL));
+    g_assert(iph == test_buffer + sizeof(ethernet_hdr_t));
+
+    /* With tunnel inspection the header is the inner IP header */
+    len = make_pkt_gre(test_buffer, ETH_PROTOCOL_IPV6, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP);
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, TRUE,
+                                        &iph, NULL));
+    g_assert(iph == test_buffer + sizeof(ethernet_hdr_t) + sizeof(ip6_hdr_t) +
+             sizeof(gre_hdr_t));
+    inet_flow_table_unref(table);
+}
+
+void test_flow_get_full_tuple()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetTuple *tuple = NULL;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert_nonnull((flow = inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE,
+                                                FALSE, NULL, &tuple)));
+    g_assert_nonnull(tuple);
+    g_assert_true(inet_tuple_exact(tuple, &flow->tuple));
+    free(tuple);
+
+    /* The tuple is allocated even when the frame does not parse */
+    tuple = NULL;
+    g_assert_null(inet_flow_get_full(table, test_buffer, 10, 0, 0, TRUE, TRUE, FALSE, NULL,
+                                     &tuple));
+    g_assert_nonnull(tuple);
+    free(tuple);
+    inet_flow_table_unref(table);
+}
+
+void test_flow_get_full_parse_fail()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint len;
+
+    setup_test();
+    /* An Ethernet frame that does not carry IP */
+    len = make_pkt(test_buffer, 0x0806, IP_PROTOCOL_UDP);
+    g_assert_null(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE, NULL,
+                                     NULL));
+
+    /* An IP packet with an unknown version */
+    guint8 *p = build_hdr_bad_ipv4(test_buffer, IP_PROTOCOL_UDP, FALSE);
+    p = build_hdr_udp(p, FALSE);
+    g_assert_null(inet_flow_get_full(table, test_buffer, (guint) (p - test_buffer), 0, 0, TRUE,
+                                     FALSE, FALSE, NULL, NULL));
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
+    inet_flow_table_unref(table);
+}
+
+void test_flow_parse_functions()
+{
+    InetTuple tuple = { 0 };
+    InetTuple *result;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+
+    /* A frame starting with Ethernet */
+    g_assert(inet_flow_parse(test_buffer, len, NULL, &tuple, FALSE) == &tuple);
+    g_assert_cmpuint(((struct sockaddr_in *)&tuple.src)->sin_port, ==, htons(TEST_SPORT));
+    g_assert_nonnull((result = inet_flow_parse(test_buffer, len, NULL, NULL, FALSE)));
+    g_assert_true(inet_tuple_exact(result, &tuple));
+    free(result);
+
+    /* A packet starting with IP */
+    memset(&tuple, 0, sizeof(tuple));
+    g_assert(inet_flow_parse_ip(test_buffer + sizeof(ethernet_hdr_t),
+                                len - sizeof(ethernet_hdr_t), NULL, &tuple, FALSE) == &tuple);
+    g_assert_cmpuint(((struct sockaddr_in *)&tuple.dst)->sin_port, ==, htons(TEST_DPORT));
+    g_assert_nonnull((result = inet_flow_parse_ip(test_buffer + sizeof(ethernet_hdr_t),
+                                                  len - sizeof(ethernet_hdr_t), NULL, NULL,
+                                                  FALSE)));
+    g_assert_true(inet_tuple_exact(result, &tuple));
+    free(result);
+}
+
+void test_flow_create_lookup()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetTuple tuple = { 0 };
+    InetTuple other;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert(inet_flow_parse(test_buffer, len, NULL, &tuple, FALSE) == &tuple);
+
+    g_assert_null(inet_flow_lookup(table, &tuple));
+    inet_flow_table_max_set(table, 2);
+    g_assert_nonnull((flow = inet_flow_create(table, &tuple, 1000)));
+    g_assert(inet_flow_lookup(table, &tuple) == flow);
+    g_assert_cmpuint(flow->state, ==, FLOW_NEW);
+    g_assert_cmpuint(flow->timestamp, ==, 1000);
+
+    /* A packet of the flow finds the created flow */
+    g_assert(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE, NULL, NULL)
+             == flow);
+
+    /* No flow is created when the table is full */
+    inet_flow_table_max_set(table, 1);
+    other = tuple;
+    ((struct sockaddr_in *)&other.src)->sin_port = htons(1);
+    g_assert_null(inet_flow_create(table, &other, 0));
+    g_assert_null(inet_flow_lookup(table, &other));
+    inet_flow_table_unref(table);
+}
+
+void test_flow_establish_close()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint64 ts = 1000;
+    InetTuple tuple = { 0 };
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert(inet_flow_parse(test_buffer, len, NULL, &tuple, FALSE) == &tuple);
+    g_assert_nonnull((flow = inet_flow_create(table, &tuple, ts)));
+
+    /* An established flow uses the open timeout */
+    inet_flow_establish(table, flow);
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+    g_assert_null(inet_flow_expire(table, ts + (INET_FLOW_DEFAULT_NEW_TIMEOUT + 1) *
+                                   TIMESTAMP_RESOLUTION_US));
+    g_assert(inet_flow_expire(table, ts + INET_FLOW_DEFAULT_OPEN_TIMEOUT *
+                              TIMESTAMP_RESOLUTION_US) == flow);
+
+    /* A closed flow uses the closed timeout */
+    inet_flow_close(table, flow);
+    g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
+    g_assert_null(inet_flow_expire(table, ts + (INET_FLOW_DEFAULT_CLOSED_TIMEOUT - 1) *
+                                   TIMESTAMP_RESOLUTION_US));
+    g_assert(inet_flow_expire(table, ts + INET_FLOW_DEFAULT_CLOSED_TIMEOUT *
+                              TIMESTAMP_RESOLUTION_US) == flow);
+    inet_flow_table_unref(table);
+}
+
+void test_flow_fragment_limit()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint64 now = get_time_us();
+    guint8 *p;
+    guint len;
+    int i;
+
+    setup_test();
+    for (i = 0; i <= MAX_FRAG_DEPTH; i++) {
+        p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+        p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, i);
+        len = (guint) (p - test_buffer);
+        if (i < MAX_FRAG_DEPTH) {
+            g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, now, TRUE, TRUE,
+                                                FALSE, NULL, NULL));
+        } else {
+            /* No more datagrams can be tracked */
+            g_assert_null(inet_flow_get_full(table, test_buffer, len, 0, now, TRUE, TRUE,
+                                             FALSE, NULL, NULL));
+        }
+    }
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, MAX_FRAG_DEPTH);
+
+    /* Expired datagrams make room for new ones */
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0,
+                                        now + (FRAG_EXPIRY_TIME + 1) * TIMESTAMP_RESOLUTION_US,
+                                        TRUE, TRUE, FALSE, NULL, NULL));
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
+    inet_flow_table_unref(table);
+}
+
+void test_tuple_equal_mismatch()
+{
+    InetTuple a, b;
+
+    setup_test();
+    make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert(flow_parse(&a, test_buffer, MAX_BUFFER_SIZE, NULL, NULL, 0, NULL, FALSE));
+
+    /* The upper end has the higher port, which is the destination */
+    b = a;
+    ((struct sockaddr_in *)&b.dst)->sin_addr.s_addr ^= 1;
+    g_assert_false(inet_tuple_equal(&a, &b));
+    b = a;
+    ((struct sockaddr_in *)&b.dst)->sin_port = htons(TEST_DPORT + 1);
+    g_assert_false(inet_tuple_equal(&a, &b));
+}
+
+void test_flow_fragment_mismatch()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint8 *p;
+    guint len;
+
+    setup_test();
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    ip_hdr_t *ip = (ip_hdr_t *) p;
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
+    len = (guint) (p - test_buffer);
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                        NULL, NULL));
+
+    /* A fragment with the same ID but another protocol is another datagram */
+    ip->frag_off = GUINT16_TO_BE(1);
+    ip->protocol = IP_PROTOCOL_TCP;
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                        NULL, NULL));
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 2);
+
+    /* A fragment with the same ID but another destination is another datagram */
+    ip->protocol = IP_PROTOCOL_UDP;
+    ip->daddr ^= 1;
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                        NULL, NULL));
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 3);
+    inet_flow_table_unref(table);
+}
+
+void test_flow_parse_malformed_gre()
+{
+    guint16 protocols[] = { ETH_PROTOCOL_IP, ETH_PROTOCOL_IPV6 };
+    guint8 *p;
+    guint len;
+    int i;
+
+    for (i = 0; i < G_N_ELEMENTS(protocols); i++) {
+        setup_test();
+        p = build_hdr_eth(test_buffer, protocols[i]);
+        p = build_hdr_ip(p, protocols[i], IP_PROTOCOL_GRE, FALSE);
+        guint gre_offset = (guint) (p - test_buffer);
+
+        /* The frame ends inside the GRE header */
+        len = make_pkt_gre(test_buffer, protocols[i], protocols[i], IP_PROTOCOL_UDP);
+        g_assert_false(flow_parse(test_tuple, test_buffer, gre_offset + 2, NULL, NULL, 0, NULL,
+                                  TRUE));
+
+        /* The frame ends inside the inner packet */
+        g_assert_false(flow_parse(test_tuple, test_buffer, len - 4, NULL, NULL, 0, NULL, TRUE));
+    }
+
+    /* The frame ends inside the optional GRE fields */
+    setup_test();
+    len = make_pkt_gre_flags(test_buffer, GRE_HEADER_CSUM | GRE_HEADER_KEY | GRE_HEADER_SEQ,
+                             ETH_PROTOCOL_IP);
+    g_assert_false(flow_parse(test_tuple, test_buffer, sizeof(ethernet_hdr_t) +
+                              sizeof(ip_hdr_t) + sizeof(gre_hdr_t) + 8, NULL, NULL, 0, NULL,
+                              TRUE));
+}
+
+void test_flow_parse_malformed_ipv4_tcp()
+{
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
+    g_assert_false(flow_parse(test_tuple, test_buffer, len - 4, NULL, NULL, 0, NULL, FALSE));
+}
+
+void test_flow_parse_malformed_auth_length()
+{
+    guint8 *p;
+
+    setup_test();
+    /* The authentication header is 24 bytes, but the packet holds 20 of them */
+    p = build_hdr_ipv6(test_buffer, IP_PROTOCOL_AUTH, FALSE);
+    build_hdr_auth(p, IP_PROTOCOL_UDP);
+    g_assert_false(flow_parse_ipv6(test_tuple, test_buffer, sizeof(ip6_hdr_t) + 20, NULL, NULL,
+                                   0, NULL, FALSE));
+}
+
+void test_flow_parse_malformed_mpls()
+{
+    guint len;
+
+    setup_test();
+    /* More than three labels */
+    len = make_pkt_mpls(test_buffer, 0x1, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, 4);
+    g_assert_false(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, FALSE));
+
+    /* The frame ends inside a label */
+    g_assert_false(flow_parse(test_tuple, test_buffer, sizeof(ethernet_hdr_t) + 2, NULL, NULL,
+                              0, NULL, FALSE));
+}
+
+void test_flow_parse_malformed_pppoe()
+{
+    setup_test();
+    make_pkt_pppoe(test_buffer, IP_PROTOCOL_UDP, PPP_PROTOCOL_IPV4);
+    /* The frame ends inside the PPPoE header */
+    g_assert_false(flow_parse(test_tuple, test_buffer, sizeof(ethernet_hdr_t) + 4, NULL, NULL,
+                              0, NULL, FALSE));
+}
+
+static void count_flows(InetFlow * flow, gpointer data)
+{
+    (*(int *)data)++;
+}
+
+void test_flow_foreach_null()
+{
+    int count = 0;
+
+    inet_flow_foreach(NULL, (IFFunc) count_flows, &count);
+    g_assert_cmpint(count, ==, 0);
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -2452,6 +2884,26 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/match/icmp", test_flow_match_icmp);
     g_test_add_func("/flow/match/icmp6", test_flow_match_icmp6);
     g_test_add_func("/flow/nomatch/port", test_flow_nomatch_port);
+
+    g_test_add_func("/tuple/exact", test_tuple_exact);
+    g_test_add_func("/flow/parse/gre/options", test_flow_parse_gre_options);
+    g_test_add_func("/flow/parse/ip_in_ipv6", test_flow_parse_ip_in_ipv6);
+    g_test_add_func("/flow/parse/functions", test_flow_parse_functions);
+    g_test_add_func("/flow/get_full/iphr", test_flow_get_full_iphr);
+    g_test_add_func("/flow/get_full/tuple", test_flow_get_full_tuple);
+    g_test_add_func("/flow/get_full/parse_fail", test_flow_get_full_parse_fail);
+    g_test_add_func("/flow/create_lookup", test_flow_create_lookup);
+    g_test_add_func("/flow/establish_close", test_flow_establish_close);
+    g_test_add_func("/flow/fragment/limit", test_flow_fragment_limit);
+
+    g_test_add_func("/tuple/equal/mismatch", test_tuple_equal_mismatch);
+    g_test_add_func("/flow/fragment/mismatch", test_flow_fragment_mismatch);
+    g_test_add_func("/flow/parse/malformed/gre", test_flow_parse_malformed_gre);
+    g_test_add_func("/flow/parse/malformed/ipv4_tcp", test_flow_parse_malformed_ipv4_tcp);
+    g_test_add_func("/flow/parse/malformed/auth", test_flow_parse_malformed_auth_length);
+    g_test_add_func("/flow/parse/malformed/mpls", test_flow_parse_malformed_mpls);
+    g_test_add_func("/flow/parse/malformed/pppoe_hdr", test_flow_parse_malformed_pppoe);
+    g_test_add_func("/flow/foreach/null", test_flow_foreach_null);
 
     rc = g_test_run();
     return rc;
