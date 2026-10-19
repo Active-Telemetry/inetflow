@@ -77,7 +77,7 @@ guint inet_tuple_hash(InetTuple * tuple);
 gboolean inet_flow_hash_seed_set(guint64 seed);
 
 /* InetFragList */
-#define INET_FRAG_DEFAULT_MAX                 128
+#define INET_FRAG_DEFAULT_MAX                 1024
 #define INET_FRAG_DEFAULT_TIMEOUT             30
 typedef struct _InetFragList InetFragList;
 InetFragList *inet_frag_list_new(guint max_datagrams, guint timeout_s);
