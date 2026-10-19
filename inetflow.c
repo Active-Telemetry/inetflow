@@ -197,12 +197,14 @@ static int sock_address_comparison(struct sockaddr_storage *a, struct sockaddr_s
     }
 }
 
+/* Order the ends of a tuple by port, and by address when the ports are equal,
+ * so that both directions of a flow give the same order */
 struct sockaddr_storage *inet_tuple_get_lower(InetTuple * tuple)
 {
     guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
     guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
     if (sport < dport ||
-        (sport == 0 && dport == 0 && sock_address_comparison(&tuple->src, &tuple->dst) < 0))
+        (sport == dport && sock_address_comparison(&tuple->src, &tuple->dst) < 0))
         return &tuple->src;
     else
         return &tuple->dst;
@@ -213,7 +215,7 @@ struct sockaddr_storage *inet_tuple_get_upper(InetTuple * tuple)
     guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
     guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
     if (dport > sport ||
-        (dport == 0 && sport == 0 && sock_address_comparison(&tuple->dst, &tuple->src) > 0))
+        (dport == sport && sock_address_comparison(&tuple->dst, &tuple->src) > 0))
         return &tuple->dst;
     else
         return &tuple->src;

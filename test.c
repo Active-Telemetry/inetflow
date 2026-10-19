@@ -2114,6 +2114,33 @@ void test_flow_match_udp()
     inet_flow_table_unref(table);
 }
 
+void test_flow_match_same_ports(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table;
+    InetFlow *flow1, *flow2;
+    guint len;
+
+    setup_test();
+    g_assert_nonnull((table = inet_flow_table_new()));
+
+    /* Both ends use the same port, as for IKE on port 500 */
+    TEST_DPORT = TEST_SPORT;
+    len = make_pkt(test_buffer, eth_protocol, IP_PROTOCOL_UDP);
+    g_assert_nonnull((flow1 =
+                      inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                         NULL, NULL)));
+    len = make_pkt_reverse(test_buffer, eth_protocol, IP_PROTOCOL_UDP);
+    g_assert_nonnull((flow2 =
+                      inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                         NULL, NULL)));
+    TEST_DPORT = _TEST_DPORT;
+
+    g_assert(flow1 == flow2);
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
+    inet_flow_table_unref(table);
+}
+
 void test_flow_match_udp6()
 {
     InetFlowTable *table;
@@ -2350,6 +2377,10 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/expiry/queue", test_flow_expiry_queue);
     g_test_add_func("/flow/match/udp", test_flow_match_udp);
     g_test_add_func("/flow/match/udp6", test_flow_match_udp6);
+    g_test_add_data_func("/flow/match/same_ports/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_flow_match_same_ports);
+    g_test_add_data_func("/flow/match/same_ports/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_flow_match_same_ports);
     g_test_add_func("/flow/match/tcp", test_flow_match_tcp);
     g_test_add_func("/flow/match/tcp6", test_flow_match_tcp6);
     g_test_add_func("/flow/match/icmp", test_flow_match_icmp);
