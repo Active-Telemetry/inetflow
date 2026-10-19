@@ -17,6 +17,7 @@
  */
 #include "inetflow.c"
 #include <arpa/inet.h>
+#include <pthread.h>
 
 static InetPacket test_packet;
 static InetTuple _test_tuple;
@@ -588,7 +589,7 @@ static gboolean parse_tuple(InetTuple * tuple, const guint8 * frame, guint lengt
 static gboolean parse_ipv6_tuple(InetTuple * tuple, const guint8 * frame, guint length, gboolean tunnel)
 {
     InetPacket pkt = { 0 };
-    gboolean parsed = flow_parse_ipv6(&pkt, frame, length, NULL, 0, tunnel ? INET_FLOW_TUNNEL : 0);
+    gboolean parsed = flow_parse_ipv6(&pkt, frame, length, NULL, 0, tunnel ? INET_FLOW_TUNNEL : 0, 0);
 
     *tuple = pkt.tuple;
     return parsed;
@@ -2262,6 +2263,95 @@ void test_flow_parse_ip_in_ipv6()
         g_assert(parse_tuple(test_tuple, test_buffer, len, FALSE));
         g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, inner[i]);
     }
+}
+
+/* Build levels of IPv6 in IPv6 headers followed by a UDP header */
+static guint build_nested_ipv6(guint8 * buf, guint levels)
+{
+    guint len = levels * sizeof(ip6_hdr_t) + sizeof(udp_hdr_t);
+    guint i;
+
+    memset(buf, 0, len);
+    for (i = 0; i < levels; i++) {
+        ip6_hdr_t *ip6 = (ip6_hdr_t *) (buf + i * sizeof(ip6_hdr_t));
+        ip6->ver_tc_fl = htonl(0x60000000);
+        ip6->pay_len = htons(len - (i + 1) * sizeof(ip6_hdr_t));
+        ip6->next_hdr = i + 1 < levels ? IP_PROTOCOL_IPV6 : IP_PROTOCOL_UDP;
+        ip6->saddr[15] = 1;
+        ip6->daddr[15] = 2;
+    }
+    udp_hdr_t *udp = (udp_hdr_t *) (buf + levels * sizeof(ip6_hdr_t));
+    udp->source = htons(TEST_SPORT);
+    udp->destination = htons(TEST_DPORT);
+    udp->length = htons(sizeof(udp_hdr_t));
+    return len;
+}
+
+static gpointer parse_deep_tunnel(gpointer data)
+{
+    guint8 *buf = g_malloc(G_MAXUINT16);
+    guint len = build_nested_ipv6(buf, (G_MAXUINT16 - sizeof(udp_hdr_t)) / sizeof(ip6_hdr_t));
+    InetPacket *pkt = data;
+
+    inet_packet_parse(buf, len, INET_FLOW_TUNNEL, NULL, pkt);
+    g_free(buf);
+    return NULL;
+}
+
+void test_flow_parse_tunnel_depth()
+{
+    guint8 buf[1024];
+    pthread_attr_t attr;
+    pthread_t thread;
+    InetPacket pkt;
+    guint len;
+
+    /* Eight IP headers parse to the innermost packet */
+    len = build_nested_ipv6(buf, MAX_IP_DEPTH);
+    g_assert_true(inet_packet_parse(buf, len, INET_FLOW_TUNNEL, NULL, &pkt));
+    g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(pkt.anomalies, ==, 0);
+
+    /* A ninth fails the parse */
+    len = build_nested_ipv6(buf, MAX_IP_DEPTH + 1);
+    g_assert_false(inet_packet_parse(buf, len, INET_FLOW_TUNNEL, NULL, &pkt));
+    g_assert_cmpint(pkt.status, ==, INET_PACKET_PARSE_ERROR);
+    g_assert_cmpuint(pkt.anomalies, ==, INET_ANOMALY_TUNNEL_DEPTH);
+
+    /* Without tunnel inspection only the outer header is parsed */
+    g_assert_true(inet_packet_parse(buf, len, 0, NULL, &pkt));
+    g_assert_cmpuint(pkt.tuple.protocol, ==, IP_PROTOCOL_IPV6);
+
+    /* A 64 KiB frame of nested headers fits in a 64 KiB thread stack */
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024);
+    g_assert_cmpint(pthread_create(&thread, &attr, parse_deep_tunnel, &pkt), ==, 0);
+    pthread_join(thread, NULL);
+    pthread_attr_destroy(&attr);
+    g_assert_cmpuint(pkt.anomalies, ==, INET_ANOMALY_TUNNEL_DEPTH);
+}
+
+void test_flow_parse_tunnel_depth_gre()
+{
+    guint8 buf[1024];
+    guint8 *p = buf;
+    InetPacket pkt;
+    guint i, levels = MAX_IP_DEPTH + 1;
+    guint len = levels * (sizeof(ip_hdr_t) + sizeof(gre_hdr_t));
+
+    /* IPv4 and GRE headers nested past the limit */
+    memset(buf, 0, sizeof(buf));
+    for (i = 0; i < levels; i++) {
+        ip_hdr_t *ip = (ip_hdr_t *) p;
+        gre_hdr_t *gre = (gre_hdr_t *) (p + sizeof(ip_hdr_t));
+        ip->ihl_version = 0x45;
+        ip->tot_len = htons(len - i * (sizeof(ip_hdr_t) + sizeof(gre_hdr_t)));
+        ip->protocol = IP_PROTOCOL_GRE;
+        gre->protocol = htons(ETH_PROTOCOL_IP);
+        p += sizeof(ip_hdr_t) + sizeof(gre_hdr_t);
+    }
+    g_assert_false(inet_packet_parse(buf, len, INET_FLOW_TUNNEL, NULL, &pkt));
+    g_assert_cmpuint(pkt.anomalies & INET_ANOMALY_TUNNEL_DEPTH, !=, 0);
 }
 
 void test_packet_l3()
@@ -4075,6 +4165,8 @@ int main(int argc, char *argv[])
     g_test_add_func("/tuple/exact", test_tuple_exact);
     g_test_add_func("/flow/parse/gre/options", test_flow_parse_gre_options);
     g_test_add_func("/flow/parse/ip_in_ipv6", test_flow_parse_ip_in_ipv6);
+    g_test_add_func("/flow/parse/tunnel_depth", test_flow_parse_tunnel_depth);
+    g_test_add_func("/flow/parse/tunnel_depth/gre", test_flow_parse_tunnel_depth_gre);
     g_test_add_func("/packet/parse", test_packet_parse);
     g_test_add_func("/packet/l3", test_packet_l3);
     g_test_add_func("/packet/tuple", test_packet_tuple);

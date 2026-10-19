@@ -316,6 +316,7 @@ why. Option checks run only with `INET_FLOW_VALIDATE` or `INET_FLOW_TCP_TRACK`.
 | `FRAG_OVERLAP` | A fragment overlaps data already seen |
 | `FRAG_TOO_LARGE` | A fragment ends past the maximum IP packet length |
 | `FRAG_LIMIT`, `FRAG_EXPIRED` | The datagram could not be tracked, or its tracking timed out |
+| `TUNNEL_DEPTH` | The packet has more than 8 nested IP headers, so the parse stops |
 
 ### Fragments
 

@@ -135,6 +135,7 @@ typedef enum {
 #define INET_ANOMALY_FRAG_TOO_LARGE         (1 << 14)   /* Fragment ends past the maximum IP length */
 #define INET_ANOMALY_FRAG_LIMIT             (1 << 15)   /* Datagram not tracked, the list is full */
 #define INET_ANOMALY_FRAG_EXPIRED           (1 << 16)   /* Datagram tracking timed out */
+#define INET_ANOMALY_TUNNEL_DEPTH           (1 << 17)   /* More than 8 nested IP headers */
 
 /* TCP options reported in InetPacket.tcp.options */
 #define INET_TCP_OPT_MSS                    (1 << 0)

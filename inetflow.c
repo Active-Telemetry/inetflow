@@ -24,6 +24,7 @@
 #define FRAG_EXPIRY_TIME            INET_FRAG_DEFAULT_TIMEOUT
 #define MAX_FRAG_DEPTH              INET_FRAG_DEFAULT_MAX
 #define TCP_FLAGS_MASK              0x01FF
+#define MAX_IP_DEPTH                8
 
 /* IP and TCP option kinds that have no length byte */
 #define OPT_END                     0
@@ -236,8 +237,10 @@ typedef struct ipv6_partial_ext_hdr_t {
     guint8 hdr_ext_len;
 } __attribute__ ((packed)) ipv6_partial_ext_hdr_t;
 
-static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags);
-static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags);
+static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags,
+                                guint depth);
+static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags,
+                                guint depth);
 
 struct _InetTcpFlow;
 static void tcp_flow_free(struct _InetTcpFlow *tcp_flow);
@@ -623,6 +626,16 @@ static inline void set_anomaly(InetPacket * pkt, guint32 anomaly)
     pkt->anomalies |= anomaly;
 }
 
+/* Each tunnel level is parsed by recursion, so a frame of nested headers
+ * would otherwise use stack in proportion to its length */
+static gboolean ip_depth_ok(InetPacket * pkt, guint depth)
+{
+    if (depth < MAX_IP_DEPTH)
+        return TRUE;
+    set_anomaly(pkt, INET_ANOMALY_TUNNEL_DEPTH);
+    return FALSE;
+}
+
 static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length, guint32 hdr_len)
 {
     if (hdr_len <= length) {
@@ -787,7 +800,8 @@ static void set_headers(InetPacket * pkt, const guint8 * l3, const guint8 * l4)
     pkt->tcp.options = 0;
 }
 
-static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags,
+                               guint depth)
 {
     gre_hdr_t *gre = (gre_hdr_t *) data;
     if (length < sizeof(gre_hdr_t))
@@ -808,11 +822,11 @@ static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 le
     DEBUG("Protocol: %d\n", proto);
     switch (proto) {
     case ETH_PROTOCOL_IP:
-        if (!flow_parse_ipv4(pkt, data + offset, length - offset, fragments, ts, flags))
+        if (!flow_parse_ipv4(pkt, data + offset, length - offset, fragments, ts, flags, depth + 1))
             return FALSE;
         break;
     case ETH_PROTOCOL_IPV6:
-        if (!flow_parse_ipv6(pkt, data + offset, length - offset, fragments, ts, flags))
+        if (!flow_parse_ipv6(pkt, data + offset, length - offset, fragments, ts, flags, depth + 1))
             return FALSE;
         break;
     default:
@@ -821,13 +835,16 @@ static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 le
     return TRUE;
 }
 
-static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags,
+                                guint depth)
 {
     InetTuple *f = &pkt->tuple;
     ip_hdr_t *iph = (ip_hdr_t *) data;
     guint32 hdr_len;
     guint16 tot_len;
 
+    if (!ip_depth_ok(pkt, depth))
+        return FALSE;
     if (length < sizeof(ip_hdr_t)) {
         set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
         return FALSE;
@@ -878,7 +895,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
             break;
         case IP_PROTOCOL_GRE:
             if (flags & INET_FLOW_TUNNEL) {
-                if (!flow_parse_gre(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags))
+                if (!flow_parse_gre(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags, depth))
                     return FALSE;
             }
             break;
@@ -919,7 +936,8 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     return TRUE;
 }
 
-static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags,
+                                guint depth)
 {
     InetTuple *f = &pkt->tuple;
     ip6_hdr_t *iph = (ip6_hdr_t *) data;
@@ -928,6 +946,8 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     auth_hdr_t *auth_hdr;
     ipv6_partial_ext_hdr_t *ipv6_part_hdr;
 
+    if (!ip_depth_ok(pkt, depth))
+        return FALSE;
     if (length < sizeof(ip6_hdr_t)) {
         set_anomaly(pkt, INET_ANOMALY_IPV6_TRUNCATED);
         return FALSE;
@@ -973,19 +993,19 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
         break;
     case IP_PROTOCOL_IPV4:
         if (flags & INET_FLOW_TUNNEL)
-            if (!flow_parse_ipv4(pkt, data, length, fragments, ts, flags)) {
+            if (!flow_parse_ipv4(pkt, data, length, fragments, ts, flags, depth + 1)) {
                 return FALSE;
             }
         break;
     case IP_PROTOCOL_IPV6:
         if (flags & INET_FLOW_TUNNEL)
-            if (!flow_parse_ipv6(pkt, data, length, fragments, ts, flags)) {
+            if (!flow_parse_ipv6(pkt, data, length, fragments, ts, flags, depth + 1)) {
                 return FALSE;
             }
         break;
     case IP_PROTOCOL_GRE:
         if (flags & INET_FLOW_TUNNEL)
-            if (!flow_parse_gre(pkt, data, length, fragments, ts, flags)) {
+            if (!flow_parse_gre(pkt, data, length, fragments, ts, flags, depth)) {
                 return FALSE;
             }
         break;
@@ -1086,10 +1106,10 @@ static gboolean flow_parse_ip(InetPacket * pkt, const guint8 * data, guint32 len
     version = 0x0f & (version >> 4);
 
     if (version == 4) {
-        if (!flow_parse_ipv4(pkt, data, length, fragments, ts, flags))
+        if (!flow_parse_ipv4(pkt, data, length, fragments, ts, flags, 0))
             return FALSE;
     } else if (version == 6) {
-        if (!flow_parse_ipv6(pkt, data, length, fragments, ts, flags))
+        if (!flow_parse_ipv6(pkt, data, length, fragments, ts, flags, 0))
             return FALSE;
     } else {
         DEBUG("Unsupported ip version: %d\n", version);
