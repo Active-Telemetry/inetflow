@@ -1762,28 +1762,28 @@ void test_flow_parse_ipv4_fragment()
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
 
     /* First IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
     guint8 len = (guint) (p - test_buffer);
     g_assert_nonnull((flow1 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* Second IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 1, 0xbeef);
     g_assert_nonnull((flow2 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(flow1 == flow2);
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* Last IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, FALSE, 2, 0xbeef);
     g_assert_nonnull((flow3 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(flow1 == flow3);
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
 
     inet_flow_free(flow1);
     inet_flow_table_free(table);
@@ -1801,7 +1801,7 @@ void test_flow_table_free_fragments()
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
     g_assert_nonnull(inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0, FLOW_GET, NULL));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
     inet_flow_table_free(table);
 }
 
@@ -1821,14 +1821,14 @@ void test_flow_fragment_direction(gconstpointer data)
     p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
     len = (guint) (p - test_buffer);
     g_assert_nonnull((first = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* The last fragment of a datagram from the server with the same ID */
     p = build_hdr_eth(test_buffer, eth_protocol);
     p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, TRUE, FALSE, 1, 0xbeef);
     len = (guint) (p - test_buffer);
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
-    g_assert(g_list_length(table->frag_info_list->head) == 2);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 2);
 
     /* The last fragment from the client still finds the first fragment */
     p = build_hdr_eth(test_buffer, eth_protocol);
@@ -1836,7 +1836,7 @@ void test_flow_fragment_direction(gconstpointer data)
     len = (guint) (p - test_buffer);
     g_assert_nonnull((last = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(first == last);
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
     inet_flow_table_free(table);
 }
 
@@ -1848,28 +1848,28 @@ void test_flow_parse_ipv6_fragment()
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
 
     /* First IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
     guint8 len = (guint) (p - test_buffer);
     g_assert_nonnull((flow1 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* Second IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, TRUE, 1, 0xbeef);
     g_assert_nonnull((flow2 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(flow1 == flow2);
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* Last IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, FALSE, 2, 0xbeef);
     g_assert_nonnull((flow3 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(flow1 == flow3);
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
 
     inet_flow_free(flow1);
     inet_flow_table_free(table);
@@ -1886,31 +1886,31 @@ void test_clear_expired_frag_info()
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
 
     /* IP fragment 1 - expired */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0x1111);
     guint8 len = (guint) (p - test_buffer);
     g_assert_nonnull((flow1 = inet_flow_get(table, test_buffer, len, now - 50 * 1000000, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* IP fragment 2 - expired */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0x2222);
     g_assert_nonnull((flow2 = inet_flow_get(table, test_buffer, len, now - 40 * 1000000, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 2);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 2);
 
     /* IP fragment 3 - not expired */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0x3333);
     g_assert_nonnull((flow3 = inet_flow_get(table, test_buffer, len, now - 30 * 1000000, FLOW_GET, NULL)));
-    g_assert(g_list_length(table->frag_info_list->head) == 3);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 3);
 
     g_assert(clear_expired_frag_info(table->frag_info_list, now) == 2);
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
-    InetFragment *non_expired = (g_list_first(table->frag_info_list->head))->data;
+    InetFragment *non_expired = table->frag_info_list->age.head->data;
     g_assert(non_expired->id == 0x3333);
 
     /* Do proper clean up */
@@ -2547,11 +2547,11 @@ void test_flow_fragment_limit(gconstpointer data)
             g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_LIMIT, ==, INET_ANOMALY_FRAG_LIMIT);
         }
     }
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, MAX_FRAG_DEPTH);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, MAX_FRAG_DEPTH);
 
     /* Expired datagrams make room for new ones */
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, now + (FRAG_EXPIRY_TIME + 1) * TIMESTAMP_RESOLUTION_US, FLOW_GET, NULL));
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 1);
     inet_flow_table_free(table);
 }
 
@@ -2743,7 +2743,7 @@ void test_flow_fragment_atomic()
         g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
         g_assert_nonnull(pkt.l4);
     }
-    g_assert_null(table->frag_info_list->head);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 0);
 
     /* An atomic fragment with the ID of a tracked datagram does not change it */
     len = make_ipv6_fragment(test_buffer, TRUE, 0, 9);
@@ -2751,7 +2751,7 @@ void test_flow_fragment_atomic()
     len = make_ipv6_fragment(test_buffer, FALSE, 0, 9);
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
     g_assert_cmpuint(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 1);
     inet_flow_table_free(table);
 }
 
@@ -2772,13 +2772,13 @@ void test_flow_fragment_mismatch()
     ip->frag_off = GUINT16_TO_BE(1);
     ip->protocol = IP_PROTOCOL_TCP;
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 2);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 2);
 
     /* A fragment with the same ID but another destination is another datagram */
     ip->protocol = IP_PROTOCOL_UDP;
     ip->daddr ^= 1;
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 3);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 3);
     inet_flow_table_free(table);
 }
 
@@ -3376,6 +3376,61 @@ static InetFlow *send_fragment(InetFlowTable * table, guint16 eth_protocol, guin
     return inet_flow_get(table, test_buffer, (guint) (p - test_buffer) + extra, ts, FLOW_GET, pkt);
 }
 
+/* Datagrams in flight between the same two hosts are told apart by their IDs */
+void test_fragment_many_datagrams(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    const guint16 count = 500;
+    InetPacket pkt;
+    guint16 id;
+
+    setup_test();
+    inet_flow_table_frag_limits_set(table, count, 30);
+    for (id = 0; id < count; id++) {
+        TEST_SPORT = 10000 + id;
+        g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, 1000, id, &pkt));
+    }
+    TEST_SPORT = _TEST_SPORT;
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, count);
+
+    /* The last fragments arrive in the reverse order and complete each datagram */
+    for (id = count; id-- > 0;) {
+        g_assert_nonnull(send_fragment(table, eth_protocol, 1, FALSE, 0, 1000, id, &pkt));
+        g_assert_cmpuint(pkt.tuple.sport, ==, htons(10000 + id));
+    }
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 0);
+    g_assert_null(table->frag_info_list->age.head);
+    inet_flow_table_free(table);
+}
+
+/* A full list clears the expired datagrams, oldest first, and keeps the rest */
+void test_fragment_expiry_order(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    guint64 ts = 1000;
+    InetFragment *oldest;
+    InetPacket pkt;
+
+    setup_test();
+    inet_flow_table_frag_limits_set(table, 3, 30);
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, ts, 1, &pkt));
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, ts + 10 * TIMESTAMP_RESOLUTION_US, 2, &pkt));
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, ts + 20 * TIMESTAMP_RESOLUTION_US, 3, &pkt));
+
+    /* Only the first datagram has expired, so the new one takes its place */
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, ts + 35 * TIMESTAMP_RESOLUTION_US, 4, &pkt));
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 3);
+    oldest = table->frag_info_list->age.head->data;
+    g_assert_cmpuint(oldest->timestamp, ==, ts + 10 * TIMESTAMP_RESOLUTION_US);
+
+    /* Nothing has expired, so another datagram can not be tracked */
+    g_assert_null(send_fragment(table, eth_protocol, 0, TRUE, 0, ts + 36 * TIMESTAMP_RESOLUTION_US, 5, &pkt));
+    g_assert_cmpint(pkt.status, ==, INET_PACKET_FRAG_UNTRACKED);
+    inet_flow_table_free(table);
+}
+
 void test_fragment_overlap(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
@@ -3394,7 +3449,7 @@ void test_fragment_overlap(gconstpointer data)
     /* Third fragment follows on from the second without overlap */
     g_assert_nonnull(send_fragment(table, eth_protocol, 3, FALSE, 0, 0, 0xbeef, &pkt));
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
     inet_flow_table_free(table);
 }
 
@@ -3425,13 +3480,13 @@ void test_fragment_out_of_order(gconstpointer data)
     /* The middle fragment arrives before the first fragment */
     g_assert_nonnull(send_fragment(table, eth_protocol, 1, TRUE, 0, 0, 0xbeef, &pkt));
     g_assert_nonnull((first = send_fragment(table, eth_protocol, 0, TRUE, 0, 0, 0xbeef, &pkt)));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
 
     /* The last fragment gets the ports from the first fragment */
     g_assert_nonnull((last = send_fragment(table, eth_protocol, 2, FALSE, 0, 0, 0xbeef, &pkt)));
     g_assert(first == last);
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
     inet_flow_table_free(table);
 }
 
@@ -3443,9 +3498,9 @@ void test_fragment_last_first()
     setup_test();
     /* The last fragment arriving first does not end the tracking */
     g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 1, FALSE, 0, 0, 0xbeef, &pkt));
-    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 1);
     g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, 0, 0xbeef, &pkt));
-    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    g_assert(g_hash_table_size(table->frag_info_list->table) == 0);
     inet_flow_table_free(table);
 }
 
@@ -3474,8 +3529,8 @@ void test_fragment_many_ranges()
     /* Fragments with gaps between them, more than the ranges recorded */
     for (i = 0; i <= INET_FRAG_MAX_RANGES; i++)
         g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, i * 2, TRUE, 0, 0, 0xbeef, &pkt));
-    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
-    entry = table->frag_info_list->head->data;
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 1);
+    entry = table->frag_info_list->age.head->data;
     g_assert_cmpuint(entry->nranges, ==, INET_FRAG_MAX_RANGES);
     inet_flow_table_free(table);
 }
@@ -4261,6 +4316,10 @@ int main(int argc, char *argv[])
 
     g_test_add_data_func("/fragment/overlap/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_overlap);
     g_test_add_data_func("/fragment/overlap/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_overlap);
+    g_test_add_data_func("/fragment/many/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_many_datagrams);
+    g_test_add_data_func("/fragment/many/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_many_datagrams);
+    g_test_add_data_func("/fragment/expiry_order/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_expiry_order);
+    g_test_add_data_func("/fragment/expiry_order/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_expiry_order);
     g_test_add_data_func("/fragment/too_large/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_too_large);
     g_test_add_data_func("/fragment/too_large/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_too_large);
     g_test_add_data_func("/fragment/out_of_order/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_out_of_order);

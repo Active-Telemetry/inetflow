@@ -75,6 +75,8 @@ typedef struct _InetFragRange {
 } InetFragRange;
 
 typedef struct _InetFragment {
+    GList link;                 /* Link in the age queue of the fragment list */
+    guint32 hash;
     guint32 id;
     InetTuple tuple;
     guint64 timestamp;
@@ -88,9 +90,11 @@ typedef struct _InetFragment {
 
 struct _InetFragList {
     GRWLock lock;
-    GList *head;
+    GHashTable *table;
+    GQueue age;                 /* Datagrams in the order they were first seen */
     guint max;
     guint64 timeout_us;
+    guint32 seed;               /* Random, so that hash collisions can not be chosen in advance */
 };
 
 struct _InetFlowTable {
@@ -427,24 +431,36 @@ guint inet_tuple_hash(InetTuple * tuple)
     return tuple->hash;
 }
 
-static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
+/* A datagram is identified by its source, destination, protocol and ID, so a
+ * fragment in the other direction belongs to another datagram. The ports are
+ * not in non-first fragments, so they are not part of the key. */
+static guint32 frag_hash(const InetFragment * f, guint32 seed)
 {
-    InetFragment *entry = (InetFragment *) a;
-    InetFragment *f = (InetFragment *) b;
+    guint32 words[10];
+    guint addr_words = f->tuple.family == AF_INET ? 1 : 4;
+    guint n = 0;
 
-    if (entry->id != f->id || entry->tuple.protocol != f->tuple.protocol) {
-        return 1;
-    }
+    memcpy(&words[n], &f->tuple.src, addr_words * sizeof(guint32));
+    n += addr_words;
+    memcpy(&words[n], &f->tuple.dst, addr_words * sizeof(guint32));
+    n += addr_words;
+    words[n++] = f->id;
+    words[n++] = (guint32) f->tuple.family << 8 | f->tuple.protocol;
+    return hash_words(words, n, seed);
+}
 
-    /* A datagram is identified by its source, destination, protocol and ID,
-     * so a fragment in the other direction belongs to another datagram. The
-     * ports are not in non-first fragments, so only the addresses are compared. */
-    if (entry->tuple.family == f->tuple.family
-        && addr_compare(&f->tuple, &entry->tuple.src, &f->tuple.src) == 0
-        && addr_compare(&f->tuple, &entry->tuple.dst, &f->tuple.dst) == 0) {
-        return 0;
-    }
-    return 1;
+static guint frag_hash_get(gconstpointer f)
+{
+    return ((const InetFragment *)f)->hash;
+}
+
+static gboolean frag_equal(gconstpointer a, gconstpointer b)
+{
+    const InetFragment *x = a;
+    const InetFragment *y = b;
+
+    return x->id == y->id && x->tuple.protocol == y->tuple.protocol && x->tuple.family == y->tuple.family
+        && addr_compare(&x->tuple, &x->tuple.src, &y->tuple.src) == 0 && addr_compare(&x->tuple, &x->tuple.dst, &y->tuple.dst) == 0;
 }
 
 static gboolean frag_is_expired(InetFragList * list, InetFragment * frag_info, guint64 timestamp)
@@ -455,18 +471,22 @@ static gboolean frag_is_expired(InetFragList * list, InetFragment * frag_info, g
     return FALSE;
 }
 
-static guint16 clear_expired_frag_info(InetFragList * frag_info_list, guint64 timestamp)
+static void frag_remove(InetFragList * list, InetFragment * frag)
 {
-    guint16 cleared = 0;
-    GList *l = frag_info_list->head;
-    while (l != NULL) {
-        GList *next = l->next;
-        if (frag_is_expired(frag_info_list, l->data, timestamp)) {
-            free(l->data);
-            frag_info_list->head = g_list_delete_link(frag_info_list->head, l);
-            cleared += 1;
-        }
-        l = next;
+    g_hash_table_remove(list->table, frag);
+    g_queue_unlink(&list->age, &frag->link);
+    g_free(frag);
+}
+
+/* A datagram keeps the timestamp of its first fragment, so the age queue is in
+ * expiry order and the expired datagrams are at its head */
+static guint clear_expired_frag_info(InetFragList * list, guint64 timestamp)
+{
+    guint cleared = 0;
+
+    while (list->age.head && frag_is_expired(list, list->age.head->data, timestamp)) {
+        frag_remove(list, list->age.head->data);
+        cleared++;
     }
     return cleared;
 }
@@ -504,24 +524,25 @@ static gboolean frag_overlaps(InetFragment * found, guint32 start, guint32 end)
     return FALSE;
 }
 
-static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guint64 ts)
+static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guint64 timestamp)
 {
-    uint64_t timestamp = ts ? : get_time_us();
+    InetFragment *entry;
 
-    if (g_list_length(fragments->head) >= fragments->max) {
-        if (clear_expired_frag_info(fragments, timestamp) == 0) {
-            DEBUG("Fragment tracking limit reached\n");
-            f->anomalies |= INET_ANOMALY_FRAG_LIMIT;
-            return FALSE;
-        }
+    if (g_hash_table_size(fragments->table) >= fragments->max && clear_expired_frag_info(fragments, timestamp) == 0) {
+        DEBUG("Fragment tracking limit reached\n");
+        f->anomalies |= INET_ANOMALY_FRAG_LIMIT;
+        return FALSE;
     }
-    InetFragment *entry = g_malloc0(sizeof(InetFragment));
+    entry = g_malloc0(sizeof(InetFragment));
+    entry->link.data = entry;
+    entry->hash = f->hash;
     entry->id = f->id;
     entry->tuple = f->tuple;
     entry->timestamp = timestamp;
     entry->total = f->total;
     add_frag_range(entry, f->offset, f->offset + f->length);
-    fragments->head = g_list_prepend(fragments->head, entry);
+    g_queue_push_tail_link(&fragments->age, &entry->link);
+    g_hash_table_add(fragments->table, entry);
     return TRUE;
 }
 
@@ -532,30 +553,28 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
 {
     guint32 start = entry->offset;
     guint32 end = entry->offset + entry->length;
+    guint64 timestamp = entry->timestamp ? : get_time_us();
     InetFragment *found;
-    GList *match;
-    gboolean result = TRUE;
+    gboolean result;
 
     entry->anomalies = 0;
     entry->total = more_fragments ? 0 : end;
+    entry->hash = frag_hash(entry, fragments->seed);
 
     g_rw_lock_writer_lock(&fragments->lock);
-    match = g_list_find_custom(fragments->head, entry, find_flow_by_frag_info);
-    if (match && frag_is_expired(fragments, match->data, entry->timestamp ? : get_time_us())) {
+    found = g_hash_table_lookup(fragments->table, entry);
+    if (found && frag_is_expired(fragments, found, timestamp)) {
         entry->anomalies |= INET_ANOMALY_FRAG_EXPIRED;
-        free(match->data);
-        fragments->head = g_list_delete_link(fragments->head, match);
-        match = NULL;
+        frag_remove(fragments, found);
+        found = NULL;
     }
 
-    /* If we didn't find a match, store this fragment for later */
-    if (!match) {
-        result = store_frag_info(fragments, entry, entry->timestamp);
+    if (!found) {
+        result = store_frag_info(fragments, entry, timestamp);
         g_rw_lock_writer_unlock(&fragments->lock);
         return result;
     }
 
-    found = match->data;
     if (frag_overlaps(found, start, end))
         entry->anomalies |= INET_ANOMALY_FRAG_OVERLAP;
     add_frag_range(found, start, end);
@@ -573,21 +592,21 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
     }
 
     /* Stop tracking the datagram once all of its data has been seen */
-    if (found->total && found->nranges == 1 && found->ranges[0].start == 0 && found->ranges[0].end >= found->total) {
-        fragments->head = g_list_delete_link(fragments->head, match);
-        free(found);
-    }
+    if (found->total && found->nranges == 1 && found->ranges[0].start == 0 && found->ranges[0].end >= found->total)
+        frag_remove(fragments, found);
     g_rw_lock_writer_unlock(&fragments->lock);
-    return result;
+    return TRUE;
 }
 
 void inet_frag_list_free(InetFragList * fragments)
 {
     g_rw_lock_writer_lock(&fragments->lock);
-    g_list_free_full(fragments->head, free);
+    while (fragments->age.head)
+        frag_remove(fragments, fragments->age.head->data);
+    g_hash_table_destroy(fragments->table);
     g_rw_lock_writer_unlock(&fragments->lock);
     g_rw_lock_clear(&fragments->lock);
-    free(fragments);
+    g_free(fragments);
 }
 
 static void frag_list_limits_set(InetFragList * fragments, guint max_datagrams, guint timeout_s)
@@ -598,8 +617,12 @@ static void frag_list_limits_set(InetFragList * fragments, guint max_datagrams, 
 
 InetFragList *inet_frag_list_new(guint max_datagrams, guint timeout_s)
 {
-    InetFragList *new_list = calloc(1, sizeof(InetFragList));
+    InetFragList *new_list = g_malloc0(sizeof(InetFragList));
+
     g_rw_lock_init(&new_list->lock);
+    new_list->table = g_hash_table_new(frag_hash_get, frag_equal);
+    g_queue_init(&new_list->age);
+    new_list->seed = g_random_int();
     frag_list_limits_set(new_list, max_datagrams, timeout_s);
     return new_list;
 }
