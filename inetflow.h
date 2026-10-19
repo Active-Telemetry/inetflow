@@ -120,6 +120,8 @@ typedef enum {
     INET_FLOW_TUNNEL = 1 << 1,  /* Parse into GRE and IP in IP tunnels */
     INET_FLOW_CREATE = 1 << 2,  /* Create the flow if it does not exist */
     INET_FLOW_UPDATE = 1 << 3,  /* Update the flow state, counters and expiry */
+    INET_FLOW_VALIDATE = 1 << 4,        /* Check IP and TCP options */
+    INET_FLOW_TCP_TRACK = 1 << 5,       /* Track TCP connections, implies VALIDATE */
 } InetFlowFlags;
 
 /* InetPacket status */
@@ -142,6 +144,16 @@ typedef enum {
 #define INET_ANOMALY_TCP_HLEN_TOO_SMALL     (1 << 7)    /* TCP data offset is less than 5 */
 #define INET_ANOMALY_UDP_TRUNCATED          (1 << 8)    /* UDP header extends past the packet */
 #define INET_ANOMALY_UDP_LEN_INVALID        (1 << 9)    /* UDP length is less than 8 or too long */
+#define INET_ANOMALY_IPV4_OPT_INVALID       (1 << 10)   /* IPv4 option length is invalid */
+#define INET_ANOMALY_TCP_OPT_INVALID        (1 << 11)   /* TCP option length is invalid */
+#define INET_ANOMALY_TCP_OPT_DUPLICATE      (1 << 12)   /* TCP option appears more than once */
+
+/* TCP options reported in InetPacket.tcp.options */
+#define INET_TCP_OPT_MSS                    (1 << 0)
+#define INET_TCP_OPT_WSCALE                 (1 << 1)
+#define INET_TCP_OPT_SACK_PERMITTED         (1 << 2)
+#define INET_TCP_OPT_SACK                   (1 << 3)
+#define INET_TCP_OPT_TIMESTAMP              (1 << 4)
 
 /* InetPacket */
 typedef struct _InetPacket {
@@ -159,6 +171,11 @@ typedef struct _InetPacket {
         guint16 window;         /* Not scaled */
         guint32 seq;            /* Host byte order */
         guint32 ack;            /* Host byte order */
+        guint8 options;         /* INET_TCP_OPT_ flags, with INET_FLOW_VALIDATE */
+        guint8 wscale;          /* Window scale option */
+        guint16 mss;            /* Maximum segment size option */
+        guint32 ts_val;         /* Timestamp option value */
+        guint32 ts_ecr;         /* Timestamp option echo reply */
     } tcp;
 } InetPacket;
 

@@ -25,6 +25,17 @@
 #define MAX_FRAG_DEPTH              128
 #define TCP_FLAGS_MASK              0x01FF
 
+/* IP and TCP option kinds that have no length byte */
+#define OPT_END                     0
+#define OPT_NOP                     1
+
+/* TCP option kinds */
+#define TCP_OPT_MSS                 2
+#define TCP_OPT_WSCALE              3
+#define TCP_OPT_SACK_PERMITTED      4
+#define TCP_OPT_SACK                5
+#define TCP_OPT_TIMESTAMP           8
+
 static int lifetime_values[] = {
     INET_FLOW_DEFAULT_CLOSED_TIMEOUT,
     INET_FLOW_DEFAULT_NEW_TIMEOUT,
@@ -425,7 +436,92 @@ static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length,
     }
 }
 
-static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 length)
+/* Walk a list of IP or TCP options and return FALSE if one has an invalid
+ * length. Call func for each option that has a length byte. */
+typedef void (*OptFunc)(guint8 kind, const guint8 * opt, guint8 len, InetPacket * pkt);
+static gboolean parse_options(const guint8 * opts, guint32 length, OptFunc func,
+                              InetPacket * pkt)
+{
+    guint32 i = 0;
+
+    while (i < length) {
+        guint8 kind = opts[i];
+        if (kind == OPT_END)
+            break;
+        if (kind == OPT_NOP) {
+            i++;
+            continue;
+        }
+        if (i + 1 >= length || opts[i + 1] < 2 || i + opts[i + 1] > length)
+            return FALSE;
+        if (func)
+            func(kind, opts + i, opts[i + 1], pkt);
+        i += opts[i + 1];
+    }
+    return TRUE;
+}
+
+static void tcp_option(guint8 kind, const guint8 * opt, guint8 len, InetPacket * pkt)
+{
+    guint8 flag;
+    guint8 valid_len;
+
+    switch (kind) {
+    case TCP_OPT_MSS:
+        flag = INET_TCP_OPT_MSS;
+        valid_len = 4;
+        break;
+    case TCP_OPT_WSCALE:
+        flag = INET_TCP_OPT_WSCALE;
+        valid_len = 3;
+        break;
+    case TCP_OPT_SACK_PERMITTED:
+        flag = INET_TCP_OPT_SACK_PERMITTED;
+        valid_len = 2;
+        break;
+    case TCP_OPT_TIMESTAMP:
+        flag = INET_TCP_OPT_TIMESTAMP;
+        valid_len = 10;
+        break;
+    case TCP_OPT_SACK:
+        /* A SACK option holds one to four blocks of eight bytes */
+        if (len < 10 || len > 34 || (len - 2) % 8)
+            set_anomaly(pkt, INET_ANOMALY_TCP_OPT_INVALID);
+        else
+            pkt->tcp.options |= INET_TCP_OPT_SACK;
+        return;
+    default:
+        return;
+    }
+
+    if (len != valid_len) {
+        set_anomaly(pkt, INET_ANOMALY_TCP_OPT_INVALID);
+        return;
+    }
+    if (pkt->tcp.options & flag) {
+        set_anomaly(pkt, INET_ANOMALY_TCP_OPT_DUPLICATE);
+        return;
+    }
+    pkt->tcp.options |= flag;
+    switch (kind) {
+    case TCP_OPT_MSS:
+        pkt->tcp.mss = (opt[2] << 8) | opt[3];
+        break;
+    case TCP_OPT_WSCALE:
+        pkt->tcp.wscale = opt[2];
+        break;
+    case TCP_OPT_TIMESTAMP:
+        /* Options are not aligned, so copy the values out */
+        memcpy(&pkt->tcp.ts_val, opt + 2, sizeof(pkt->tcp.ts_val));
+        memcpy(&pkt->tcp.ts_ecr, opt + 6, sizeof(pkt->tcp.ts_ecr));
+        pkt->tcp.ts_val = GUINT32_FROM_BE(pkt->tcp.ts_val);
+        pkt->tcp.ts_ecr = GUINT32_FROM_BE(pkt->tcp.ts_ecr);
+        break;
+    }
+}
+
+static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 length,
+                               guint32 flags)
 {
     tcp_hdr_t *tcp = (tcp_hdr_t *) data;
     guint16 offset_flags;
@@ -448,8 +544,13 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
         set_anomaly(pkt, INET_ANOMALY_TCP_HLEN_TOO_SMALL);
     else if (hdr_len > length)
         set_anomaly(pkt, INET_ANOMALY_TCP_TRUNCATED);
-    else
+    else {
         set_payload(pkt, data, length, hdr_len);
+        if ((flags & (INET_FLOW_VALIDATE | INET_FLOW_TCP_TRACK))
+            && !parse_options(data + sizeof(tcp_hdr_t), hdr_len - sizeof(tcp_hdr_t),
+                              tcp_option, pkt))
+            set_anomaly(pkt, INET_ANOMALY_TCP_OPT_INVALID);
+    }
     return TRUE;
 }
 
@@ -492,6 +593,7 @@ static void set_headers(InetPacket * pkt, const guint8 * l3, const guint8 * l4)
     pkt->l4 = l4;
     pkt->payload = NULL;
     pkt->payload_length = 0;
+    pkt->tcp.options = 0;
 }
 
 static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 length,
@@ -552,6 +654,9 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
         set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
         return FALSE;
     }
+    if ((flags & INET_FLOW_VALIDATE)
+        && !parse_options(data + sizeof(ip_hdr_t), hdr_len - sizeof(ip_hdr_t), NULL, pkt))
+        set_anomaly(pkt, INET_ANOMALY_IPV4_OPT_INVALID);
     tot_len = GUINT16_FROM_BE(iph->tot_len);
     if (tot_len < hdr_len)
         set_anomaly(pkt, INET_ANOMALY_IPV4_LEN_TOO_SMALL);
@@ -578,7 +683,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     if ((GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0) {
         switch (iph->protocol) {
         case IP_PROTOCOL_TCP:
-            if (!flow_parse_tcp(pkt, data + hdr_len, length - hdr_len))
+            if (!flow_parse_tcp(pkt, data + hdr_len, length - hdr_len, flags))
                 return FALSE;
             break;
         case IP_PROTOCOL_UDP:
@@ -659,7 +764,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     pkt->l4 = data;
     switch (inet_tuple_get_protocol(f)) {
     case IP_PROTOCOL_TCP:
-        if (!flow_parse_tcp(pkt, data, length)) {
+        if (!flow_parse_tcp(pkt, data, length, flags)) {
             return FALSE;
         }
         break;

@@ -3098,6 +3098,121 @@ void test_anomaly_udp_fragment()
     g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
 }
 
+/* Build an IPv4 TCP SYN with the given option bytes and return the anomalies
+ * and the packet information for it */
+static guint32 tcp_options_info(const guint8 * opts, guint opts_len, InetPacket * pkt)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint8 *ip = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    guint8 *tcp = build_hdr_ip(ip, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE);
+    guint8 *p = build_tcp_segment(tcp, FALSE, SYN, 1, 0, 1, NULL);
+
+    memcpy(p, opts, opts_len);
+    p += opts_len;
+    ((tcp_hdr_t *) tcp)->flags = g_htons((((p - tcp) / 4) << 12) | SYN);
+    ((ip_hdr_t *) ip)->tot_len = g_htons(p - ip);
+    g_assert_nonnull(inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0,
+                                   FLOW_GET | INET_FLOW_VALIDATE, pkt));
+    inet_flow_table_unref(table);
+    return pkt->anomalies;
+}
+
+void test_tcp_options()
+{
+    InetPacket pkt;
+    const guint8 opts[] = {
+        TCP_OPT_MSS, 4, 0x05, 0xb4,
+        OPT_NOP, TCP_OPT_WSCALE, 3, 7,
+        OPT_NOP, OPT_NOP, TCP_OPT_TIMESTAMP, 10, 0, 0, 0x12, 0x34, 0, 0, 0x56, 0x78,
+        OPT_NOP, OPT_NOP, TCP_OPT_SACK_PERMITTED, 2,
+        OPT_NOP, OPT_NOP, TCP_OPT_SACK, 10, 0, 0, 0, 1, 0, 0, 0, 2,
+    };
+
+    setup_test();
+    g_assert_cmphex(tcp_options_info(opts, sizeof(opts), &pkt), ==, 0);
+    g_assert_cmphex(pkt.tcp.options, ==, INET_TCP_OPT_MSS | INET_TCP_OPT_WSCALE |
+                    INET_TCP_OPT_TIMESTAMP | INET_TCP_OPT_SACK_PERMITTED | INET_TCP_OPT_SACK);
+    g_assert_cmpuint(pkt.tcp.mss, ==, 1460);
+    g_assert_cmpuint(pkt.tcp.wscale, ==, 7);
+    g_assert_cmpuint(pkt.tcp.ts_val, ==, 0x1234);
+    g_assert_cmpuint(pkt.tcp.ts_ecr, ==, 0x5678);
+    g_assert_cmpuint(pkt.payload_length, ==, 0);
+}
+
+void test_tcp_options_invalid()
+{
+    InetPacket pkt;
+    const guint8 short_mss[] = { TCP_OPT_MSS, 3, 0x05, 0 };
+    const guint8 zero_len[] = { OPT_NOP, OPT_NOP, 0x22, 0 };
+    const guint8 past_end[] = { OPT_NOP, OPT_NOP, 0x22, 8 };
+    const guint8 bad_sack[] = { OPT_NOP, OPT_NOP, TCP_OPT_SACK, 6, 0, 0, 0, 0 };
+    const guint8 dup_wscale[] = { TCP_OPT_WSCALE, 3, 1, TCP_OPT_WSCALE, 3, 2, OPT_NOP, OPT_NOP };
+    const guint8 end_list[] = { OPT_END, 0x22, 0, 0 };
+
+    setup_test();
+    g_assert_cmphex(tcp_options_info(short_mss, sizeof(short_mss), &pkt), ==,
+                    INET_ANOMALY_TCP_OPT_INVALID);
+    g_assert_cmphex(pkt.tcp.options, ==, 0);
+    g_assert_cmphex(tcp_options_info(zero_len, sizeof(zero_len), &pkt), ==,
+                    INET_ANOMALY_TCP_OPT_INVALID);
+    g_assert_cmphex(tcp_options_info(past_end, sizeof(past_end), &pkt), ==,
+                    INET_ANOMALY_TCP_OPT_INVALID);
+    g_assert_cmphex(tcp_options_info(bad_sack, sizeof(bad_sack), &pkt), ==,
+                    INET_ANOMALY_TCP_OPT_INVALID);
+    g_assert_cmphex(tcp_options_info(dup_wscale, sizeof(dup_wscale), &pkt), ==,
+                    INET_ANOMALY_TCP_OPT_DUPLICATE);
+    g_assert_cmpuint(pkt.tcp.wscale, ==, 1);
+    /* Bytes after the end of option list option are padding */
+    g_assert_cmphex(tcp_options_info(end_list, sizeof(end_list), &pkt), ==, 0);
+}
+
+void test_ipv4_options_invalid()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    guint8 *p;
+    guint len;
+
+    setup_test();
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    guint8 *opts = p + sizeof(ip_hdr_t);
+    p = build_hdr_ipv4_options(p, IP_PROTOCOL_TCP, 8);
+    p = build_hdr_tcp(p, FALSE);
+    len = (guint) (p - test_buffer);
+
+    /* Valid option */
+    opts[0] = 0x94;
+    opts[1] = 4;
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET | INET_FLOW_VALIDATE, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==, 0);
+
+    /* Option that extends past the header */
+    opts[4] = 0x94;
+    opts[5] = 6;
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET | INET_FLOW_VALIDATE, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==,
+                    INET_ANOMALY_IPV4_OPT_INVALID);
+    inet_flow_table_unref(table);
+}
+
+void test_options_not_validated()
+{
+    const guint8 opts[] = { TCP_OPT_MSS, 3, 0x05, 0 };
+    InetFlowTable *table;
+    InetPacket pkt;
+    guint len;
+
+    /* Without INET_FLOW_VALIDATE the options are not checked */
+    setup_test();
+    tcp_options_info(opts, sizeof(opts), &pkt);
+    len = (guint) (pkt.payload - test_buffer);
+    table = inet_flow_table_new();
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
+    g_assert_cmphex(pkt.anomalies, ==, 0);
+    g_assert_cmphex(pkt.tcp.options, ==, 0);
+    inet_flow_table_unref(table);
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -3253,6 +3368,11 @@ int main(int argc, char *argv[])
     g_test_add_data_func("/anomaly/udp/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
                          test_anomaly_udp);
     g_test_add_func("/anomaly/udp/fragment", test_anomaly_udp_fragment);
+
+    g_test_add_func("/tcp/options", test_tcp_options);
+    g_test_add_func("/tcp/options/invalid", test_tcp_options_invalid);
+    g_test_add_func("/tcp/options/not_validated", test_options_not_validated);
+    g_test_add_func("/ipv4/options/invalid", test_ipv4_options_invalid);
 
     rc = g_test_run();
     return rc;
