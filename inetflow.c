@@ -182,7 +182,7 @@ static inline guint64 get_time_us(void)
 
 static int sock_address_comparison(struct sockaddr_storage *a, struct sockaddr_storage *b)
 {
-    if (((struct sockaddr_in *)a)->sin_family != ((struct sockaddr_in *)a)->sin_family) {
+    if (((struct sockaddr_in *)a)->sin_family != ((struct sockaddr_in *)b)->sin_family) {
         return 1;
     }
 

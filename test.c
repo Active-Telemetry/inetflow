@@ -2141,6 +2141,29 @@ void test_flow_match_same_ports(gconstpointer data)
     inet_flow_table_unref(table);
 }
 
+static void set_tuple(InetTuple * tuple, int family, guint16 sport, guint16 dport)
+{
+    memset(tuple, 0, sizeof(*tuple));
+    tuple->protocol = IP_PROTOCOL_UDP;
+    tuple->src.ss_family = family;
+    tuple->dst.ss_family = family;
+    ((struct sockaddr_in *)&tuple->src)->sin_port = g_htons(sport);
+    ((struct sockaddr_in *)&tuple->dst)->sin_port = g_htons(dport);
+}
+
+void test_tuple_equal_family()
+{
+    InetTuple v4, v6;
+
+    /* All zero addresses compare equal byte for byte across the families */
+    set_tuple(&v4, AF_INET, 68, 67);
+    set_tuple(&v6, AF_INET6, 68, 67);
+    g_assert_false(inet_tuple_equal(&v4, &v6));
+    g_assert_false(inet_tuple_equal(&v6, &v4));
+    g_assert_true(inet_tuple_equal(&v4, &v4));
+    g_assert_true(inet_tuple_equal(&v6, &v6));
+}
+
 void test_flow_match_udp6()
 {
     InetFlowTable *table;
@@ -2377,6 +2400,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/expiry/queue", test_flow_expiry_queue);
     g_test_add_func("/flow/match/udp", test_flow_match_udp);
     g_test_add_func("/flow/match/udp6", test_flow_match_udp6);
+    g_test_add_func("/tuple/equal/family", test_tuple_equal_family);
     g_test_add_data_func("/flow/match/same_ports/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
                          test_flow_match_same_ports);
     g_test_add_data_func("/flow/match/same_ports/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
