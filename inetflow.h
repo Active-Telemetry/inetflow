@@ -76,10 +76,21 @@ gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b);
 guint inet_tuple_hash(InetTuple * tuple);
 
 /* InetFragList */
+#define INET_FRAG_MAX_RANGES 8
+typedef struct _InetFragRange {
+    guint32 start;
+    guint32 end;
+} InetFragRange;
 typedef struct _InetFragment {
     guint32 id;
     InetTuple tuple;
     guint64 timestamp;
+    guint32 offset;             /* Byte offset of the fragment data in the datagram */
+    guint32 length;             /* Bytes of data in the fragment */
+    guint32 anomalies;          /* INET_ANOMALY_FRAG_ flags for the fragment */
+    guint32 total;              /* Datagram length, or zero until the last fragment is seen */
+    guint8 nranges;             /* Ranges of the datagram seen so far */
+    InetFragRange ranges[INET_FRAG_MAX_RANGES];
 } InetFragment;
 typedef struct _InetFragList {
     GRWLock lock;
@@ -88,8 +99,6 @@ typedef struct _InetFragList {
 
 InetFragList *inet_frag_list_new();
 void inet_frag_list_free(InetFragList * finished);
-gboolean inet_frag_list_update(InetFragList * fragments, InetFragment * entry,
-                               gboolean more_fragments);
 
 /* InetFlow */
 typedef struct _InetFlow {
@@ -147,6 +156,10 @@ typedef enum {
 #define INET_ANOMALY_IPV4_OPT_INVALID       (1 << 10)   /* IPv4 option length is invalid */
 #define INET_ANOMALY_TCP_OPT_INVALID        (1 << 11)   /* TCP option length is invalid */
 #define INET_ANOMALY_TCP_OPT_DUPLICATE      (1 << 12)   /* TCP option appears more than once */
+#define INET_ANOMALY_FRAG_OVERLAP           (1 << 13)   /* Fragment overlaps data already seen */
+#define INET_ANOMALY_FRAG_TOO_LARGE         (1 << 14)   /* Fragment ends past the maximum IP length */
+#define INET_ANOMALY_FRAG_LIMIT             (1 << 15)   /* Datagram not tracked, the list is full */
+#define INET_ANOMALY_FRAG_EXPIRED           (1 << 16)   /* Datagram tracking timed out */
 
 /* TCP options reported in InetPacket.tcp.options */
 #define INET_TCP_OPT_MSS                    (1 << 0)

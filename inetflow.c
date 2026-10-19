@@ -312,7 +312,9 @@ static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
 
 static gboolean frag_is_expired(InetFragment * frag_info, guint64 timestamp)
 {
-    if (timestamp - frag_info->timestamp > FRAG_EXPIRY_TIME * TIMESTAMP_RESOLUTION_US)
+    /* Caller supplied timestamps can go backwards, which is not expiry */
+    if (timestamp > frag_info->timestamp &&
+        timestamp - frag_info->timestamp > FRAG_EXPIRY_TIME * TIMESTAMP_RESOLUTION_US)
         return TRUE;
     return FALSE;
 }
@@ -334,56 +336,116 @@ static guint16 clear_expired_frag_info(InetFragList * frag_info_list, guint64 ti
     return cleared;
 }
 
+/* Add the range of a fragment to the ranges seen for its datagram. Ranges that
+ * touch are merged, so a datagram received in order uses one range. */
+static void add_frag_range(InetFragment * found, guint32 start, guint32 end)
+{
+    int i;
+
+    for (i = 0; i < found->nranges; i++) {
+        InetFragRange *r = &found->ranges[i];
+        if (r->start <= end && start <= r->end) {
+            start = MIN(start, r->start);
+            end = MAX(end, r->end);
+            found->ranges[i--] = found->ranges[--found->nranges];
+        }
+    }
+    /* With too many separate ranges the datagram can not complete and expires */
+    if (found->nranges < INET_FRAG_MAX_RANGES) {
+        found->ranges[found->nranges].start = start;
+        found->ranges[found->nranges].end = end;
+        found->nranges++;
+    }
+}
+
+static gboolean frag_overlaps(InetFragment * found, guint32 start, guint32 end)
+{
+    int i;
+
+    for (i = 0; i < found->nranges; i++) {
+        if (start < found->ranges[i].end && found->ranges[i].start < end)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guint64 ts)
 {
     uint64_t timestamp = ts ? : get_time_us();
-    guint32 id = f->id;
 
-    g_rw_lock_writer_lock(&fragments->lock);
     if (g_list_length(fragments->head) >= MAX_FRAG_DEPTH) {
         if (clear_expired_frag_info(fragments, timestamp) == 0) {
             DEBUG("Fragment tracking limit reached\n");
-            g_rw_lock_writer_unlock(&fragments->lock);
+            f->anomalies |= INET_ANOMALY_FRAG_LIMIT;
             return FALSE;
         }
     }
     InetFragment *entry = g_malloc0(sizeof(InetFragment));
-    entry->id = id;
+    entry->id = f->id;
     entry->tuple = f->tuple;
     entry->timestamp = timestamp;
+    entry->total = f->total;
+    add_frag_range(entry, f->offset, f->offset + f->length);
     fragments->head = g_list_prepend(fragments->head, entry);
-    g_rw_lock_writer_unlock(&fragments->lock);
     return TRUE;
 }
 
-gboolean inet_frag_list_update(InetFragList * fragments, InetFragment * entry,
-                               gboolean more_fragments)
+/* Match a fragment to its datagram. The entry gives the fragment offset and
+ * length, and returns the ports and the anomalies. Returns FALSE when the
+ * datagram can not be tracked. */
+static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
+                                 gboolean more_fragments)
 {
+    guint32 start = entry->offset;
+    guint32 end = entry->offset + entry->length;
+    InetFragment *found;
     GList *match;
+    gboolean result = TRUE;
 
-    /* If there are no more fragments, we need a write lock to remove the entry */
-    (more_fragments ? g_rw_lock_reader_lock : g_rw_lock_writer_lock) (&fragments->lock);
+    entry->anomalies = 0;
+    entry->total = more_fragments ? 0 : end;
+
+    g_rw_lock_writer_lock(&fragments->lock);
     match = g_list_find_custom(fragments->head, entry, find_flow_by_frag_info);
+    if (match && frag_is_expired(match->data, entry->timestamp ? : get_time_us())) {
+        entry->anomalies |= INET_ANOMALY_FRAG_EXPIRED;
+        free(match->data);
+        fragments->head = g_list_delete_link(fragments->head, match);
+        match = NULL;
+    }
 
     /* If we didn't find a match, store this fragment for later */
     if (!match) {
-        (more_fragments ? g_rw_lock_reader_unlock :
-         g_rw_lock_writer_unlock) (&fragments->lock);
-        return store_frag_info(fragments, entry, entry->timestamp);
+        result = store_frag_info(fragments, entry, entry->timestamp);
+        g_rw_lock_writer_unlock(&fragments->lock);
+        return result;
     }
 
-    InetFragment *found_flow = match->data;
+    found = match->data;
+    if (frag_overlaps(found, start, end))
+        entry->anomalies |= INET_ANOMALY_FRAG_OVERLAP;
+    add_frag_range(found, start, end);
+    if (!more_fragments)
+        found->total = end;
 
-    entry->tuple.sport = found_flow->tuple.sport;
-    entry->tuple.dport = found_flow->tuple.dport;
-    /* If this is the last IP fragment (MF is unset), clean up the list */
-    if (!more_fragments) {
-        fragments->head = g_list_remove_link(fragments->head, match);
-        free(match->data);
-        g_list_free(match);
+    /* The first fragment holds the ports. It can arrive after other fragments,
+     * so store its ports, or give the stored ports to a later fragment. */
+    if (start == 0) {
+        found->tuple.sport = entry->tuple.sport;
+        found->tuple.dport = entry->tuple.dport;
+    } else {
+        entry->tuple.sport = found->tuple.sport;
+        entry->tuple.dport = found->tuple.dport;
     }
-    (more_fragments ? g_rw_lock_reader_unlock : g_rw_lock_writer_unlock) (&fragments->lock);
-    return TRUE;
+
+    /* Stop tracking the datagram once all of its data has been seen */
+    if (found->total && found->nranges == 1 && found->ranges[0].start == 0
+        && found->ranges[0].end >= found->total) {
+        fragments->head = g_list_delete_link(fragments->head, match);
+        free(found);
+    }
+    g_rw_lock_writer_unlock(&fragments->lock);
+    return result;
 }
 
 void inet_frag_list_free(InetFragList * finished)
@@ -708,15 +770,23 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     /* Non-first IP fragments (frag_offset is non-zero) will need a look-up
      * to find sport and dport. First fragments need to be saved.
      */
-    if (fragments && (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF)) {
+    if (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) {
         InetFragment entry = { 0 };
         entry.id = iph->id;
         entry.tuple = *f;
         entry.timestamp = ts;
+        entry.offset = (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) * EIGHT_OCTET_UNITS;
+        entry.length = length - hdr_len;
+
+        if (hdr_len + entry.offset + entry.length > G_MAXUINT16)
+            set_anomaly(pkt, INET_ANOMALY_FRAG_TOO_LARGE);
+        if (!fragments)
+            return TRUE;
 
         gboolean more_fragments = !!(GUINT16_FROM_BE(iph->frag_off) & 0x2000);
 
-        gboolean result = inet_frag_list_update(fragments, &entry, more_fragments);
+        gboolean result = frag_list_update(fragments, &entry, more_fragments);
+        set_anomaly(pkt, entry.anomalies);
         *f = entry.tuple;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;
@@ -732,6 +802,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     InetTuple *f = &pkt->tuple;
     ip6_hdr_t *iph = (ip6_hdr_t *) data;
     frag_hdr_t *fragment_hdr = NULL;
+    guint32 frag_length = 0;
     auth_hdr_t *auth_hdr;
     ipv6_partial_ext_hdr_t *ipv6_part_hdr;
 
@@ -823,6 +894,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
 
         data += sizeof(frag_hdr_t);
         length -= sizeof(frag_hdr_t);
+        frag_length = length;
 
         /* Non-first IP fragments (frag_offset is non-zero) will need a look-up
          * to find sport and dport - there's no point continuing to parse.
@@ -855,15 +927,23 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     /* Non-first IP fragments (frag_offset is non-zero) will need a look-up
      * to find sport and dport. First IP fragments need to be added to the list.
      */
-    if (fragments && fragment_hdr) {
+    if (fragment_hdr) {
         InetFragment entry = { 0 };
         entry.id = fragment_hdr->id;
         entry.tuple = *f;
         entry.timestamp = ts;
+        entry.offset = GUINT16_FROM_BE(fragment_hdr->fo_res_mflag) & 0xFFF8;
+        entry.length = frag_length;
+
+        if (entry.offset + entry.length > G_MAXUINT16)
+            set_anomaly(pkt, INET_ANOMALY_FRAG_TOO_LARGE);
+        if (!fragments)
+            return TRUE;
 
         gboolean more_fragments = !!(GUINT16_FROM_BE(fragment_hdr->fo_res_mflag) & 0x1);
 
-        gboolean result = inet_frag_list_update(fragments, &entry, more_fragments);
+        gboolean result = frag_list_update(fragments, &entry, more_fragments);
+        set_anomaly(pkt, entry.anomalies);
         *f = entry.tuple;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;

@@ -1871,7 +1871,7 @@ void test_flow_parse_ipv4_fragment()
 
     /* Second IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
-    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0xb9,
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 1,
                               0xbeef);
     g_assert_nonnull((flow2 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1880,7 +1880,7 @@ void test_flow_parse_ipv4_fragment()
 
     /* Last IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
-    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, FALSE, 0xb9,
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, FALSE, 2,
                               0xbeef);
     g_assert_nonnull((flow3 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1963,7 +1963,7 @@ void test_flow_parse_ipv6_fragment()
 
     /* Second IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
-    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, TRUE, 0xb9,
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, TRUE, 1,
                               0xbeef);
     g_assert_nonnull((flow2 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1972,7 +1972,7 @@ void test_flow_parse_ipv6_fragment()
 
     /* Last IP fragment */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
-    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, FALSE, 0xb9,
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, FALSE, 2,
                               0xbeef);
     g_assert_nonnull((flow3 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -2561,6 +2561,7 @@ void test_flow_fragment_limit(gconstpointer data)
             InetPacket pkt;
             g_assert_null(inet_flow_get(table, test_buffer, len, now, FLOW_GET, &pkt));
             g_assert_cmpint(pkt.status, ==, INET_PACKET_FRAG_UNTRACKED);
+            g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_LIMIT, ==, INET_ANOMALY_FRAG_LIMIT);
         }
     }
     g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, MAX_FRAG_DEPTH);
@@ -3213,6 +3214,143 @@ void test_options_not_validated()
     inet_flow_table_unref(table);
 }
 
+/* Send one fragment of datagram 0xbeef holding extra bytes after the UDP
+ * header, and return the flow. The packet details are returned in pkt. */
+static InetFlow *send_fragment(InetFlowTable * table, guint16 eth_protocol, guint16 offset,
+                               gboolean more, guint extra, guint64 ts, guint16 id,
+                               InetPacket * pkt)
+{
+    guint8 *p = build_hdr_eth(test_buffer, eth_protocol);
+    p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, FALSE, more, offset, id);
+    return inet_flow_get(table, test_buffer, (guint) (p - test_buffer) + extra, ts, FLOW_GET,
+                         pkt);
+}
+
+void test_fragment_overlap(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+
+    setup_test();
+    /* First fragment holds bytes 0 to 23 */
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 16, 0, 0xbeef, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
+
+    /* Second fragment starts at byte 16 */
+    g_assert_nonnull(send_fragment(table, eth_protocol, 2, TRUE, 0, 0, 0xbeef, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, INET_ANOMALY_FRAG_OVERLAP);
+
+    /* Third fragment follows on from the second without overlap */
+    g_assert_nonnull(send_fragment(table, eth_protocol, 3, FALSE, 0, 0, 0xbeef, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
+    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    inet_flow_table_unref(table);
+}
+
+void test_fragment_too_large(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+
+    setup_test();
+    g_assert_nonnull(send_fragment(table, eth_protocol, 0, TRUE, 0, 0, 0xbeef, &pkt));
+    /* The last fragment ends past 65535 bytes */
+    send_fragment(table, eth_protocol, 0x1fff, FALSE, 0, 0, 0xbeef, &pkt);
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_TOO_LARGE, ==,
+                    INET_ANOMALY_FRAG_TOO_LARGE);
+    send_fragment(table, eth_protocol, 0x1000, FALSE, 0, 0, 0xbeef, &pkt);
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_TOO_LARGE, ==, 0);
+    inet_flow_table_unref(table);
+}
+
+void test_fragment_out_of_order(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *first, *last;
+    InetPacket pkt;
+
+    setup_test();
+    /* The middle fragment arrives before the first fragment */
+    g_assert_nonnull(send_fragment(table, eth_protocol, 1, TRUE, 0, 0, 0xbeef, &pkt));
+    g_assert_nonnull((first = send_fragment(table, eth_protocol, 0, TRUE, 0, 0, 0xbeef, &pkt)));
+    g_assert(g_list_length(table->frag_info_list->head) == 1);
+
+    /* The last fragment gets the ports from the first fragment */
+    g_assert_nonnull((last = send_fragment(table, eth_protocol, 2, FALSE, 0, 0, 0xbeef, &pkt)));
+    g_assert(first == last);
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
+    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    inet_flow_table_unref(table);
+}
+
+void test_fragment_last_first()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+
+    setup_test();
+    /* The last fragment arriving first does not end the tracking */
+    g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 1, FALSE, 0, 0, 0xbeef, &pkt));
+    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, 0, 0xbeef, &pkt));
+    g_assert(g_list_length(table->frag_info_list->head) == 0);
+    inet_flow_table_unref(table);
+}
+
+
+void test_fragment_expired()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    guint64 now = get_time_us();
+
+    setup_test();
+    g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, now, 0xbeef, &pkt));
+    send_fragment(table, ETH_PROTOCOL_IP, 1, TRUE, 0,
+                  now + (FRAG_EXPIRY_TIME + 1) * TIMESTAMP_RESOLUTION_US, 0xbeef, &pkt);
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_EXPIRED, ==, INET_ANOMALY_FRAG_EXPIRED);
+    inet_flow_table_unref(table);
+}
+
+void test_fragment_many_ranges()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFragment *entry;
+    InetPacket pkt;
+    int i;
+
+    setup_test();
+    /* Fragments with gaps between them, more than the ranges recorded */
+    for (i = 0; i <= INET_FRAG_MAX_RANGES; i++)
+        g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, i * 2, TRUE, 0, 0, 0xbeef,
+                                       &pkt));
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
+    entry = table->frag_info_list->head->data;
+    g_assert_cmpuint(entry->nranges, ==, INET_FRAG_MAX_RANGES);
+    inet_flow_table_unref(table);
+}
+
+void test_fragment_no_list(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetPacket pkt;
+    guint8 *p;
+
+    setup_test();
+    /* Without a fragment list a non-first fragment has no ports */
+    p = build_hdr_eth(test_buffer, eth_protocol);
+    p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, FALSE, FALSE, 0x1fff, 0xbeef);
+    g_assert_true(inet_packet_parse(test_buffer, (guint) (p - test_buffer), INET_FLOW_L2, NULL,
+                                    &pkt));
+    g_assert_true(pkt.fragment);
+    g_assert_cmpuint(pkt.tuple.sport, ==, 0);
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_TOO_LARGE, ==,
+                    INET_ANOMALY_FRAG_TOO_LARGE);
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -3373,6 +3511,27 @@ int main(int argc, char *argv[])
     g_test_add_func("/tcp/options/invalid", test_tcp_options_invalid);
     g_test_add_func("/tcp/options/not_validated", test_options_not_validated);
     g_test_add_func("/ipv4/options/invalid", test_ipv4_options_invalid);
+
+    g_test_add_data_func("/fragment/overlap/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_fragment_overlap);
+    g_test_add_data_func("/fragment/overlap/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_fragment_overlap);
+    g_test_add_data_func("/fragment/too_large/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_fragment_too_large);
+    g_test_add_data_func("/fragment/too_large/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_fragment_too_large);
+    g_test_add_data_func("/fragment/out_of_order/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_fragment_out_of_order);
+    g_test_add_data_func("/fragment/out_of_order/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_fragment_out_of_order);
+    g_test_add_func("/fragment/last_first", test_fragment_last_first);
+    g_test_add_func("/fragment/expired", test_fragment_expired);
+
+    g_test_add_func("/fragment/many_ranges", test_fragment_many_ranges);
+    g_test_add_data_func("/fragment/no_list/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_fragment_no_list);
+    g_test_add_data_func("/fragment/no_list/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_fragment_no_list);
 
     rc = g_test_run();
     return rc;
