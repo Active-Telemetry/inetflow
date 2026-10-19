@@ -1945,6 +1945,24 @@ void test_flow_parse_ipv4_fragment()
     inet_flow_table_unref(table);
 }
 
+void test_flow_table_free_fragments()
+{
+    InetFlowTable *table;
+    guint8 *p;
+
+    setup_test();
+    g_assert_nonnull((table = inet_flow_table_new()));
+
+    /* Free the table while it still holds the first fragment of a datagram */
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
+    g_assert_nonnull(inet_flow_get_full
+                     (table, test_buffer, (guint) (p - test_buffer), 0, 0, TRUE, TRUE, FALSE,
+                      NULL, NULL));
+    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    inet_flow_table_unref(table);
+}
+
 void test_flow_parse_ipv6_fragment()
 {
     guint8 *p;
@@ -2327,6 +2345,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/bad/ip_version", test_flow_bad_ip_version);
     g_test_add_func("/flow/parse/ipv4/fragment", test_flow_parse_ipv4_fragment);
     g_test_add_func("/flow/parse/ipv6/fragment", test_flow_parse_ipv6_fragment);
+    g_test_add_func("/flow/table/free_fragments", test_flow_table_free_fragments);
     g_test_add_func("/clear/expired_frag_info", test_clear_expired_frag_info);
     g_test_add_func("/flow/expiry/queue", test_flow_expiry_queue);
     g_test_add_func("/flow/match/udp", test_flow_match_udp);

@@ -399,6 +399,8 @@ gboolean inet_frag_list_update(InetFragList * fragments, InetFragment * entry,
 void inet_frag_list_free(InetFragList * finished)
 {
     g_rw_lock_writer_lock(&finished->lock);
+    g_list_free_full(finished->head, free);
+    g_rw_lock_writer_unlock(&finished->lock);
     g_rw_lock_clear(&finished->lock);
     free(finished);
 }
