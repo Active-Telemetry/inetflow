@@ -180,6 +180,9 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
 static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length,
                                 InetFragList * fragments, guint64 ts, guint32 flags);
 
+struct _InetTcpFlow;
+static void tcp_flow_free(struct _InetTcpFlow *tcp_flow);
+
 static inline guint64 get_time_us(void)
 {
     struct timespec now;
@@ -1110,7 +1113,398 @@ void inet_flow_unref(InetFlow * flow)
     int index = find_expiry_index(flow->lifetime);
     g_queue_unlink(flow->table->expire_queue[index], &flow->list);
     g_hash_table_steal(flow->table->table, flow);
+    tcp_flow_free(flow->tcp);
     g_free((gpointer) flow);
+}
+
+/* TCP connection tracking */
+#define TCP_FIN                     0x0001
+#define TCP_SYN                     0x0002
+#define TCP_RST                     0x0004
+#define TCP_ACK                     0x0010
+#define TCP_MAX_WSCALE              14
+
+#define SEQ_LT(a, b)                ((gint32) ((a) - (b)) < 0)
+#define SEQ_LEQ(a, b)               ((gint32) ((a) - (b)) <= 0)
+#define SEQ_GT(a, b)                ((gint32) ((a) - (b)) > 0)
+#define SEQ_GEQ(a, b)               ((gint32) ((a) - (b)) >= 0)
+
+/* Events that do not make a packet invalid, during and after the handshake */
+#define TCP_HANDSHAKE_VALID_EVENTS  (INET_TCP_EVENT_SYN_RESEND | INET_TCP_EVENT_SYNACK_RESEND)
+#define TCP_VALID_EVENTS            (INET_TCP_EVENT_RETRANSMISSION | INET_TCP_EVENT_BEFORE_LAST_ACK)
+
+typedef struct _InetTcpPeer {
+    guint32 isn;
+    guint32 next_seq;           /* Sequence number after the last byte sent */
+    guint32 last_ack;           /* Highest ACK number sent */
+    guint32 window;             /* Last window advertised, scaled */
+    guint32 last_ts;            /* Highest timestamp value sent */
+    guint32 fin_seq;            /* Sequence number of the FIN */
+    guint8 wscale;              /* Window scale offered in the SYN */
+    gboolean wscale_offered;
+    gboolean ts_offered;
+    gboolean fin_sent;
+} InetTcpPeer;
+
+/* Connection state, shared by flows that carry the same connection */
+typedef struct _InetTcpState {
+    InetTcpConnState state;
+    guint refcount;
+    gboolean wscale_ok;         /* Both peers offered window scaling */
+    gboolean ts_ok;             /* Both peers offered timestamps */
+    InetTcpPeer client;
+    InetTcpPeer server;
+} InetTcpState;
+
+/* The client end of a connection as seen in one flow. Linked flows see the
+ * client at different addresses, so each flow has its own. */
+typedef struct _InetTcpFlow {
+    InetTcpState *state;
+    gboolean client_known;
+    guint16 client_port;        /* Client port in network byte order */
+    InetAddr client_addr;
+} InetTcpFlow;
+
+static InetTcpFlow *tcp_flow_new(InetTcpState * state)
+{
+    InetTcpFlow *tcp_flow = g_malloc0(sizeof(InetTcpFlow));
+
+    tcp_flow->state = state ? : g_malloc0(sizeof(InetTcpState));
+    tcp_flow->state->refcount++;
+    return tcp_flow;
+}
+
+static void tcp_flow_free(InetTcpFlow * tcp_flow)
+{
+    if (tcp_flow) {
+        if (--tcp_flow->state->refcount == 0)
+            g_free(tcp_flow->state);
+        g_free(tcp_flow);
+    }
+}
+
+static guint32 tcp_seg_len(InetPacket * pkt)
+{
+    return pkt->payload_length + !!(pkt->tcp.flags & TCP_SYN) + !!(pkt->tcp.flags & TCP_FIN);
+}
+
+static void tcp_peer_syn(InetTcpPeer * peer, InetPacket * pkt)
+{
+    peer->isn = pkt->tcp.seq;
+    peer->next_seq = pkt->tcp.seq + 1;
+    peer->window = pkt->tcp.window;
+    peer->wscale_offered = !!(pkt->tcp.options & INET_TCP_OPT_WSCALE);
+    peer->wscale = MIN(pkt->tcp.wscale, TCP_MAX_WSCALE);
+    peer->ts_offered = !!(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP);
+    peer->last_ts = pkt->tcp.ts_val;
+}
+
+/* Record the data, ACK and window of a valid packet */
+static void tcp_peer_update(InetTcpState * tcp, InetTcpPeer * peer, InetPacket * pkt)
+{
+    guint32 end = pkt->tcp.seq + tcp_seg_len(pkt);
+
+    if (SEQ_GT(end, peer->next_seq))
+        peer->next_seq = end;
+    if ((pkt->tcp.flags & TCP_ACK) && SEQ_GT(pkt->tcp.ack, peer->last_ack))
+        peer->last_ack = pkt->tcp.ack;
+    /* The window in a SYN or SYN/ACK is never scaled */
+    if (!(pkt->tcp.flags & TCP_SYN))
+        peer->window = (guint32) pkt->tcp.window << (tcp->wscale_ok ? peer->wscale : 0);
+    if ((pkt->tcp.options & INET_TCP_OPT_TIMESTAMP) && SEQ_GT(pkt->tcp.ts_val, peer->last_ts))
+        peer->last_ts = pkt->tcp.ts_val;
+    if (pkt->tcp.flags & TCP_FIN) {
+        peer->fin_sent = TRUE;
+        peer->fin_seq = pkt->tcp.seq + pkt->payload_length;
+    }
+}
+
+/* A RST is valid when its sequence number is inside the receive window */
+static gboolean tcp_rst_valid(InetTcpPeer * receiver, InetPacket * pkt)
+{
+    return SEQ_GEQ(pkt->tcp.seq, receiver->last_ack) &&
+        SEQ_LEQ(pkt->tcp.seq, receiver->last_ack + MAX(receiver->window, 1));
+}
+
+static guint32 tcp_handshake(InetTcpState * tcp, InetTcpPeer * sender,
+                             InetTcpPeer * receiver, gboolean from_client,
+                             InetPacket * pkt)
+{
+    guint16 flags = pkt->tcp.flags;
+
+    if (flags & TCP_RST) {
+        /* In SYN_SENT a RST must acknowledge the SYN. In SYN_RECV the client
+         * has not acknowledged anything yet, so a RST from the server must
+         * carry the next sequence number. */
+        if (tcp->state == INET_TCP_STATE_SYN_SENT ?
+            (flags & TCP_ACK) && pkt->tcp.ack == receiver->next_seq :
+            from_client ? tcp_rst_valid(receiver, pkt) :
+            pkt->tcp.seq == sender->next_seq) {
+            tcp->state = INET_TCP_STATE_CLOSED;
+            return 0;
+        }
+        return INET_TCP_EVENT_INVALID_RST;
+    }
+
+    if ((flags & (TCP_SYN | TCP_ACK)) == TCP_SYN) {
+        if (!from_client) {
+            /* A SYN from the server while waiting for the SYN/ACK is a
+             * simultaneous open */
+            if (tcp->state == INET_TCP_STATE_SYN_SENT) {
+                tcp_peer_syn(sender, pkt);
+                tcp->state = INET_TCP_STATE_SYN_RECV;
+                return 0;
+            }
+            return INET_TCP_EVENT_SYN_WRONG_DIR;
+        }
+        if (pkt->tcp.seq == sender->isn)
+            return INET_TCP_EVENT_SYN_RESEND;
+        if (tcp->state == INET_TCP_STATE_SYN_SENT) {
+            /* The client gave up on the old SYN and started again */
+            tcp_peer_syn(sender, pkt);
+            return 0;
+        }
+        return INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ;
+    }
+
+    if (flags & TCP_SYN) {
+        if (from_client)
+            return INET_TCP_EVENT_SYNACK_WRONG_DIR;
+        if (tcp->state == INET_TCP_STATE_SYN_RECV) {
+            if (pkt->tcp.seq != sender->isn)
+                return INET_TCP_EVENT_SYNACK_RESEND_DIFF_SEQ;
+            if (pkt->tcp.ack != receiver->next_seq)
+                return INET_TCP_EVENT_SYNACK_RESEND_DIFF_ACK;
+            return INET_TCP_EVENT_SYNACK_RESEND;
+        }
+        if (pkt->tcp.ack != receiver->next_seq)
+            return INET_TCP_EVENT_SYNACK_WRONG_ACK;
+        tcp_peer_syn(sender, pkt);
+        sender->last_ack = pkt->tcp.ack;
+        tcp->wscale_ok = receiver->wscale_offered && sender->wscale_offered;
+        tcp->ts_ok = receiver->ts_offered && sender->ts_offered;
+        tcp->state = INET_TCP_STATE_SYN_RECV;
+        return 0;
+    }
+
+    /* A packet without SYN or RST */
+    if (tcp->state == INET_TCP_STATE_SYN_SENT) {
+        if (from_client) {
+            tcp->state = INET_TCP_STATE_ONE_SIDED;
+            return INET_TCP_EVENT_ONE_SIDED;
+        }
+        return INET_TCP_EVENT_ACK_WRONG_DIR;
+    }
+    if (!from_client)
+        return INET_TCP_EVENT_ACK_WRONG_DIR;
+    if (!(flags & TCP_ACK) || pkt->tcp.ack != receiver->next_seq) {
+        if (pkt->tcp.seq == sender->next_seq)
+            return INET_TCP_EVENT_RIGHT_SEQ_WRONG_ACK;
+        return INET_TCP_EVENT_WRONG_SEQ | INET_TCP_EVENT_INVALID_ACK;
+    }
+    if (pkt->tcp.seq != sender->next_seq)
+        return INET_TCP_EVENT_WRONG_SEQ;
+    receiver->last_ack = sender->isn + 1;
+    tcp->state = INET_TCP_STATE_ESTABLISHED;
+    return 0;
+}
+
+static void tcp_close(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * receiver,
+                      gboolean from_client, InetPacket * pkt)
+{
+    gboolean fin = !!(pkt->tcp.flags & TCP_FIN);
+    gboolean acks_fin = (pkt->tcp.flags & TCP_ACK) && receiver->fin_sent &&
+        SEQ_GT(pkt->tcp.ack, receiver->fin_seq);
+
+    switch (tcp->state) {
+    case INET_TCP_STATE_ESTABLISHED:
+        if (fin)
+            tcp->state = from_client ? INET_TCP_STATE_FIN_WAIT1 : INET_TCP_STATE_CLOSE_WAIT;
+        break;
+    case INET_TCP_STATE_FIN_WAIT1:
+        if (!from_client && fin)
+            tcp->state = acks_fin ? INET_TCP_STATE_TIME_WAIT : INET_TCP_STATE_CLOSING;
+        else if (!from_client && acks_fin)
+            tcp->state = INET_TCP_STATE_FIN_WAIT2;
+        break;
+    case INET_TCP_STATE_FIN_WAIT2:
+        if (!from_client && fin)
+            tcp->state = INET_TCP_STATE_TIME_WAIT;
+        break;
+    case INET_TCP_STATE_CLOSING:
+        if (!from_client && acks_fin)
+            tcp->state = INET_TCP_STATE_TIME_WAIT;
+        break;
+    case INET_TCP_STATE_CLOSE_WAIT:
+        if (from_client && fin)
+            tcp->state = INET_TCP_STATE_LAST_ACK;
+        break;
+    case INET_TCP_STATE_LAST_ACK:
+        if (!from_client && acks_fin)
+            tcp->state = INET_TCP_STATE_CLOSED;
+        break;
+    default:
+        break;
+    }
+}
+
+/* Check a packet on a connection that has completed the handshake */
+static guint32 tcp_established(InetTcpState * tcp, InetTcpPeer * sender,
+                               InetTcpPeer * receiver, gboolean from_client,
+                               InetPacket * pkt)
+{
+    guint16 flags = pkt->tcp.flags;
+    guint32 seq = pkt->tcp.seq;
+    guint32 len = pkt->payload_length;
+    guint32 events = 0;
+
+    if (flags & TCP_SYN) {
+        if (flags & TCP_ACK) {
+            if (from_client)
+                return INET_TCP_EVENT_SYNACK_WRONG_DIR;
+            if (seq != sender->isn)
+                return INET_TCP_EVENT_SYNACK_RESEND_DIFF_SEQ;
+            if (pkt->tcp.ack != receiver->isn + 1)
+                return INET_TCP_EVENT_SYNACK_RESEND_DIFF_ACK;
+            return INET_TCP_EVENT_SYNACK_RESEND;
+        }
+        if (!from_client)
+            return INET_TCP_EVENT_SYN_WRONG_DIR;
+        return seq == sender->isn ? INET_TCP_EVENT_SYN_RESEND :
+            INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ;
+    }
+
+    if (flags & TCP_RST) {
+        if (!tcp_rst_valid(receiver, pkt))
+            return INET_TCP_EVENT_INVALID_RST;
+        tcp->state = INET_TCP_STATE_CLOSED;
+        return 0;
+    }
+
+    /* PAWS (RFC 7323). A RST is checked above without a timestamp. */
+    if (tcp->ts_ok && (!(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP) ||
+                       SEQ_LT(pkt->tcp.ts_val, sender->last_ts)))
+        events |= INET_TCP_EVENT_INVALID_TIMESTAMP;
+
+    if ((flags & TCP_ACK) && SEQ_GT(pkt->tcp.ack, receiver->next_seq))
+        events |= INET_TCP_EVENT_INVALID_ACK;
+
+    /* A keep-alive repeats the last byte sent, or sends no data, one before
+     * the next sequence number */
+    if (len <= 1 && !(flags & TCP_FIN) && seq == sender->next_seq - 1)
+        return events;
+
+    /* Data after the sender's FIN */
+    if (sender->fin_sent && SEQ_GT(seq + len, sender->fin_seq + 1))
+        events |= INET_TCP_EVENT_WRONG_SEQ;
+    else if (len && SEQ_LEQ(seq + len, receiver->last_ack))
+        events |= INET_TCP_EVENT_RETRANSMISSION | INET_TCP_EVENT_BEFORE_LAST_ACK;
+    else if (SEQ_GT(seq, receiver->last_ack + receiver->window))
+        events |= INET_TCP_EVENT_OUT_OF_WINDOW;
+    else if (len && SEQ_LT(seq, sender->next_seq))
+        events |= INET_TCP_EVENT_RETRANSMISSION;
+
+    if (!(events & ~TCP_VALID_EVENTS))
+        tcp_close(tcp, sender, receiver, from_client, pkt);
+    return events;
+}
+
+/* The flow direction comes from the last SYN seen, so a SYN from the server
+ * would swap it. Identify the client by the address and port of the first SYN. */
+static gboolean tcp_from_client(InetTcpFlow * tcp_flow, InetPacket * pkt)
+{
+    InetTuple *t = &pkt->tuple;
+
+    if (!tcp_flow->client_known)
+        return FALSE;
+    if (t->sport != t->dport)
+        return t->sport == tcp_flow->client_port;
+    return addr_compare(t, &t->src, &tcp_flow->client_addr) == 0;
+}
+
+static gboolean tcp_update(InetFlow * flow, InetPacket * pkt)
+{
+    InetTcpFlow *tcp_flow;
+    InetTcpState *tcp;
+    InetTcpPeer *sender, *receiver;
+    gboolean from_client;
+    guint32 events = 0;
+    guint32 valid_events = TCP_VALID_EVENTS;
+
+    pkt->tcp.events = 0;
+    pkt->tcp.invalid = FALSE;
+    pkt->tcp.state = inet_flow_tcp_state(flow);
+    if (inet_flow_protocol(flow) != IP_PROTOCOL_TCP || !pkt->l4 || !pkt->payload)
+        return TRUE;
+
+    if (!flow->tcp)
+        flow->tcp = tcp_flow_new(NULL);
+    tcp_flow = flow->tcp;
+    tcp = tcp_flow->state;
+
+    if (tcp->state == INET_TCP_STATE_NONE) {
+        if ((pkt->tcp.flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN) {
+            tcp_peer_syn(&tcp->client, pkt);
+            tcp_flow->client_port = pkt->tuple.sport;
+            tcp_flow->client_addr = pkt->tuple.src;
+            tcp_flow->client_known = TRUE;
+            tcp->state = INET_TCP_STATE_SYN_SENT;
+            return TRUE;
+        }
+        if ((pkt->tcp.flags & (TCP_SYN | TCP_ACK)) != (TCP_SYN | TCP_ACK)) {
+            tcp->state = INET_TCP_STATE_UNTRACKED;
+            return TRUE;
+        }
+        tcp->state = INET_TCP_STATE_ONE_SIDED;
+    }
+
+    from_client = tcp_from_client(tcp_flow, pkt);
+    sender = from_client ? &tcp->client : &tcp->server;
+    receiver = from_client ? &tcp->server : &tcp->client;
+
+    switch (tcp->state) {
+    case INET_TCP_STATE_UNTRACKED:
+    case INET_TCP_STATE_CLOSED:
+        return TRUE;
+    case INET_TCP_STATE_ONE_SIDED:
+        events = INET_TCP_EVENT_ONE_SIDED;
+        break;
+    case INET_TCP_STATE_SYN_SENT:
+    case INET_TCP_STATE_SYN_RECV:
+        events = tcp_handshake(tcp, sender, receiver, from_client, pkt);
+        valid_events = TCP_HANDSHAKE_VALID_EVENTS;
+        break;
+    default:
+        events = tcp_established(tcp, sender, receiver, from_client, pkt);
+        break;
+    }
+
+    pkt->tcp.events = events;
+    pkt->tcp.invalid = (events & ~valid_events) != 0;
+    if (!pkt->tcp.invalid && tcp->state != INET_TCP_STATE_ONE_SIDED)
+        tcp_peer_update(tcp, sender, pkt);
+    return !pkt->tcp.invalid;
+}
+
+InetTcpConnState inet_flow_tcp_state(InetFlow * flow)
+{
+    return flow->tcp ? flow->tcp->state->state : INET_TCP_STATE_NONE;
+}
+
+void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
+                        guint16 client_port)
+{
+    InetTcpFlow *tcp_flow;
+
+    if (!flow->tcp)
+        flow->tcp = tcp_flow_new(NULL);
+    tcp_flow = tcp_flow_new(flow->tcp->state);
+    tcp_flow->client_known = TRUE;
+    tcp_flow->client_port = client_port;
+    tcp_flow->client_addr = *client;
+    /* State tracked on the linked flow before the link is incomplete */
+    tcp_flow_free(linked->tcp);
+    linked->tcp = tcp_flow;
 }
 
 static void inet_flow_update_tcp(InetFlow * flow, InetFlow * packet)
@@ -1275,6 +1669,8 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
         flow_count(flow, &packet, length);
     }
     pkt->direction = packet.direction;
+    if (flags & INET_FLOW_TCP_TRACK)
+        tcp_update(flow, pkt);
     return flow;
 }
 

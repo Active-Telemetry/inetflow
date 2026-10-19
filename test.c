@@ -3351,6 +3351,574 @@ void test_fragment_no_list(gconstpointer data)
                     INET_ANOMALY_FRAG_TOO_LARGE);
 }
 
+/* TCP tracking tests. The client is TEST_SADDR:TEST_SPORT. */
+static guint16 tcp_eth_protocol = ETH_PROTOCOL_IP;
+static const guint8 *tcp_opts;
+static guint tcp_opts_len;
+
+/* Send one segment and track it. Returns FALSE if the segment is invalid. */
+static gboolean tcp_send(InetFlowTable * table, InetFlow ** flow, gboolean from_client,
+                         guint16 flags, guint32 seq, guint32 ack, guint16 window,
+                         guint payload_len, InetPacket * pkt)
+{
+    guint8 *ip = build_hdr_eth(test_buffer, tcp_eth_protocol);
+    guint8 *tcp = build_hdr_ip(ip, tcp_eth_protocol, IP_PROTOCOL_TCP, !from_client);
+    guint8 *p = build_tcp_segment(tcp, !from_client, flags, seq, ack, window, NULL);
+
+    memcpy(p, tcp_opts, tcp_opts_len);
+    p += tcp_opts_len;
+    ((tcp_hdr_t *) tcp)->flags = g_htons((((p - tcp) / 4) << 12) | flags);
+    memset(p, 0x61, payload_len);
+    p += payload_len;
+    if (tcp_eth_protocol == ETH_PROTOCOL_IP)
+        ((ip_hdr_t *) ip)->tot_len = g_htons(p - ip);
+    else
+        ((ip6_hdr_t *) ip)->pay_len = g_htons(p - ip - sizeof(ip6_hdr_t));
+
+    *flow = inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0,
+                          FLOW_GET | INET_FLOW_TCP_TRACK, pkt);
+    g_assert_nonnull(*flow);
+    g_assert_cmphex(pkt->anomalies, ==, 0);
+    return !pkt->tcp.invalid;
+}
+
+/* Send a valid segment that raises no events */
+static void tcp_send_ok(InetFlowTable * table, InetFlow ** flow, gboolean from_client,
+                        guint16 flags, guint32 seq, guint32 ack, guint16 window,
+                        guint payload_len, InetTcpConnState state)
+{
+    InetPacket pkt;
+
+    g_assert_true(tcp_send(table, flow, from_client, flags, seq, ack, window, payload_len,
+                           &pkt));
+    g_assert_cmphex(pkt.tcp.events, ==, 0);
+    g_assert_cmpint(inet_flow_tcp_state(*flow), ==, state);
+}
+
+/* Send a segment and check the events it raises and whether it is invalid */
+static void tcp_send_events(InetFlowTable * table, InetFlow ** flow, gboolean from_client,
+                            guint16 flags, guint32 seq, guint32 ack, guint16 window,
+                            guint payload_len, guint32 events, gboolean invalid)
+{
+    InetPacket pkt;
+
+    g_assert(tcp_send(table, flow, from_client, flags, seq, ack, window, payload_len, &pkt)
+             == !invalid);
+    g_assert_cmphex(pkt.tcp.events, ==, events);
+    g_assert(pkt.tcp.invalid == invalid);
+}
+
+/* Client ISN 100, server ISN 500, both windows 1000 */
+static InetFlow *tcp_establish(InetFlowTable * table)
+{
+    InetFlow *flow;
+
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    return flow;
+}
+
+static void tcp_test_setup(gconstpointer data)
+{
+    setup_test();
+    tcp_eth_protocol = GPOINTER_TO_UINT(data);
+    tcp_opts = NULL;
+    tcp_opts_len = 0;
+}
+
+void test_tcp_track_client_close(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    g_assert_true(tcp_send(table, &flow, TRUE, SYN, 100, 0, 1000, 0, &pkt));
+    g_assert_cmpint(pkt.tcp.state, ==, INET_TCP_STATE_NONE);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 10, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 111, 1000, 5, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, TRUE, FIN_ACK, 111, 506, 1000, 0, INET_TCP_STATE_FIN_WAIT1);
+    tcp_send_ok(table, &flow, FALSE, ACK, 506, 112, 1000, 0, INET_TCP_STATE_FIN_WAIT2);
+    g_assert_true(tcp_send(table, &flow, FALSE, FIN_ACK, 506, 112, 1000, 0, &pkt));
+    g_assert_cmpint(pkt.tcp.state, ==, INET_TCP_STATE_FIN_WAIT2);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_TIME_WAIT);
+    tcp_send_ok(table, &flow, TRUE, ACK, 112, 507, 1000, 0, INET_TCP_STATE_TIME_WAIT);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_server_close(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    flow = tcp_establish(table);
+    tcp_send_ok(table, &flow, FALSE, FIN_ACK, 501, 101, 1000, 0, INET_TCP_STATE_CLOSE_WAIT);
+    tcp_send_ok(table, &flow, TRUE, FIN_ACK, 101, 502, 1000, 0, INET_TCP_STATE_LAST_ACK);
+    tcp_send_ok(table, &flow, FALSE, ACK, 502, 102, 1000, 0, INET_TCP_STATE_CLOSED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_simultaneous_close(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    flow = tcp_establish(table);
+    tcp_send_ok(table, &flow, TRUE, FIN_ACK, 101, 501, 1000, 0, INET_TCP_STATE_FIN_WAIT1);
+    /* The server FIN does not acknowledge the client FIN */
+    tcp_send_ok(table, &flow, FALSE, FIN_ACK, 501, 101, 1000, 0, INET_TCP_STATE_CLOSING);
+    tcp_send_ok(table, &flow, FALSE, ACK, 502, 102, 1000, 0, INET_TCP_STATE_TIME_WAIT);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_untracked(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    /* A connection first seen with data is not tracked */
+    tcp_send_ok(table, &flow, TRUE, ACK, 7000, 9000, 1000, 10, INET_TCP_STATE_UNTRACKED);
+    tcp_send_ok(table, &flow, FALSE, ACK, 1, 2, 0, 10, INET_TCP_STATE_UNTRACKED);
+    tcp_send_ok(table, &flow, TRUE, SYN, 1, 0, 0, 0, INET_TCP_STATE_UNTRACKED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_one_sided(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    /* Only the server side of the handshake is seen */
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0,
+                    INET_TCP_EVENT_ONE_SIDED, TRUE);
+    tcp_send_events(table, &flow, FALSE, ACK, 501, 101, 1000, 10,
+                    INET_TCP_EVENT_ONE_SIDED, TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_ONE_SIDED);
+    inet_flow_table_unref(table);
+
+    /* Only the client side of the handshake is seen */
+    table = inet_flow_table_new();
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_EVENT_ONE_SIDED,
+                    TRUE);
+    tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 10, INET_TCP_EVENT_ONE_SIDED,
+                    TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_ONE_SIDED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_handshake_errors(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_events(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_EVENT_SYN_RESEND,
+                    FALSE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 999, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_WRONG_ACK, TRUE);
+    tcp_send_events(table, &flow, TRUE, SYN_ACK, 100, 0, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_WRONG_DIR, TRUE);
+    tcp_send_events(table, &flow, FALSE, ACK, 500, 101, 1000, 0,
+                    INET_TCP_EVENT_ACK_WRONG_DIR, TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_SYN_SENT);
+
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND, FALSE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 102, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND_DIFF_ACK, TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 600, 101, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND_DIFF_SEQ, TRUE);
+    tcp_send_events(table, &flow, TRUE, SYN, 200, 0, 1000, 0,
+                    INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ, TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN, 500, 0, 1000, 0,
+                    INET_TCP_EVENT_SYN_WRONG_DIR, TRUE);
+    tcp_send_events(table, &flow, TRUE, SYN_ACK, 100, 501, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_WRONG_DIR, TRUE);
+    tcp_send_events(table, &flow, FALSE, ACK, 501, 101, 1000, 0,
+                    INET_TCP_EVENT_ACK_WRONG_DIR, TRUE);
+    tcp_send_events(table, &flow, TRUE, ACK, 101, 999, 1000, 0,
+                    INET_TCP_EVENT_RIGHT_SEQ_WRONG_ACK, TRUE);
+    tcp_send_events(table, &flow, TRUE, ACK, 300, 999, 1000, 0,
+                    INET_TCP_EVENT_WRONG_SEQ | INET_TCP_EVENT_INVALID_ACK, TRUE);
+    tcp_send_events(table, &flow, TRUE, ACK, 300, 501, 1000, 0, INET_TCP_EVENT_WRONG_SEQ,
+                    TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_handshake_rst(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    /* A RST that does not acknowledge the SYN */
+    tcp_send_events(table, &flow, FALSE, RST | ACK, 0, 50, 0, 0, INET_TCP_EVENT_INVALID_RST,
+                    TRUE);
+    /* A port that is not open */
+    tcp_send_ok(table, &flow, FALSE, RST | ACK, 0, 101, 0, 0, INET_TCP_STATE_CLOSED);
+    inet_flow_table_unref(table);
+
+    table = inet_flow_table_new();
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_events(table, &flow, FALSE, RST, 900, 0, 0, 0, INET_TCP_EVENT_INVALID_RST, TRUE);
+    tcp_send_ok(table, &flow, FALSE, RST, 501, 0, 0, 0, INET_TCP_STATE_CLOSED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_established(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    flow = tcp_establish(table);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 100, INET_TCP_STATE_ESTABLISHED);
+
+    /* Data sent again before it is acknowledged */
+    tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 100,
+                    INET_TCP_EVENT_RETRANSMISSION, FALSE);
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 201, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    /* Data sent again after it is acknowledged */
+    tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 100,
+                    INET_TCP_EVENT_RETRANSMISSION | INET_TCP_EVENT_BEFORE_LAST_ACK, FALSE);
+    /* Keep-alive */
+    tcp_send_ok(table, &flow, TRUE, ACK, 200, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, TRUE, ACK, 200, 501, 1000, 1, INET_TCP_STATE_ESTABLISHED);
+    /* Data past the server window of 1000 bytes */
+    tcp_send_events(table, &flow, TRUE, ACK, 1300, 501, 1000, 10,
+                    INET_TCP_EVENT_OUT_OF_WINDOW, TRUE);
+    /* ACK for data the server has not sent */
+    tcp_send_events(table, &flow, TRUE, ACK, 201, 900, 1000, 0, INET_TCP_EVENT_INVALID_ACK,
+                    TRUE);
+    /* An invalid packet does not move the sequence numbers on */
+    tcp_send_ok(table, &flow, TRUE, ACK, 201, 501, 1000, 10, INET_TCP_STATE_ESTABLISHED);
+    /* SYN and SYN/ACK after the handshake */
+    tcp_send_events(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_EVENT_SYN_RESEND,
+                    TRUE);
+    tcp_send_events(table, &flow, TRUE, SYN, 300, 0, 1000, 0,
+                    INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ, TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN, 300, 0, 1000, 0, INET_TCP_EVENT_SYN_WRONG_DIR,
+                    TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND, TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 99, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND_DIFF_ACK, TRUE);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 600, 101, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_RESEND_DIFF_SEQ, TRUE);
+    tcp_send_events(table, &flow, TRUE, SYN_ACK, 100, 501, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_WRONG_DIR, TRUE);
+    /* RST outside and inside the window */
+    tcp_send_events(table, &flow, FALSE, RST, 5000, 0, 0, 0, INET_TCP_EVENT_INVALID_RST, TRUE);
+    tcp_send_ok(table, &flow, FALSE, RST, 501, 0, 0, 0, INET_TCP_STATE_CLOSED);
+    /* Nothing is checked after the connection closes */
+    tcp_send_ok(table, &flow, TRUE, ACK, 9999, 9999, 0, 10, INET_TCP_STATE_CLOSED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_data_after_fin(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    flow = tcp_establish(table);
+    tcp_send_ok(table, &flow, TRUE, FIN_ACK, 101, 501, 1000, 5, INET_TCP_STATE_FIN_WAIT1);
+    /* The FIN sent again is not new data */
+    tcp_send_events(table, &flow, TRUE, FIN_ACK, 101, 501, 1000, 5,
+                    INET_TCP_EVENT_RETRANSMISSION, FALSE);
+    tcp_send_events(table, &flow, TRUE, ACK, 107, 501, 1000, 5, INET_TCP_EVENT_WRONG_SEQ,
+                    TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_FIN_WAIT1);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_window_scale(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    const guint8 client_opts[] = { OPT_NOP, TCP_OPT_WSCALE, 3, 2 };
+    const guint8 server_opts[] = { OPT_NOP, TCP_OPT_WSCALE, 3, 3 };
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    tcp_opts = client_opts;
+    tcp_opts_len = sizeof(client_opts);
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_opts = server_opts;
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_opts = NULL;
+    tcp_opts_len = 0;
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    /* A window of 100 from the server scales to 800 bytes */
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 101, 100, 0, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101 + 700, 501, 1000, 10,
+                INET_TCP_STATE_ESTABLISHED);
+    tcp_send_events(table, &flow, TRUE, ACK, 101 + 900, 501, 1000, 10,
+                    INET_TCP_EVENT_OUT_OF_WINDOW, TRUE);
+    inet_flow_table_unref(table);
+
+    /* Without a window scale option from both peers the window is not scaled */
+    table = inet_flow_table_new();
+    tcp_opts = client_opts;
+    tcp_opts_len = sizeof(client_opts);
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_opts = NULL;
+    tcp_opts_len = 0;
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 101, 100, 0, INET_TCP_STATE_ESTABLISHED);
+    tcp_send_events(table, &flow, TRUE, ACK, 101 + 700, 501, 1000, 10,
+                    INET_TCP_EVENT_OUT_OF_WINDOW, TRUE);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_timestamps(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    guint8 ts_opts[] = { OPT_NOP, OPT_NOP, TCP_OPT_TIMESTAMP, 10, 0, 0, 0, 10, 0, 0, 0, 0 };
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    tcp_opts = ts_opts;
+    tcp_opts_len = sizeof(ts_opts);
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    ts_opts[7] = 50;
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    ts_opts[7] = 11;
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    ts_opts[7] = 12;
+    tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 10, INET_TCP_STATE_ESTABLISHED);
+    /* A timestamp older than the last one from the client */
+    ts_opts[7] = 5;
+    tcp_send_events(table, &flow, TRUE, ACK, 111, 501, 1000, 10,
+                    INET_TCP_EVENT_INVALID_TIMESTAMP, TRUE);
+    /* The server timestamps are checked separately */
+    ts_opts[7] = 51;
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 111, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    /* A missing timestamp after both peers offered them */
+    tcp_opts = NULL;
+    tcp_opts_len = 0;
+    tcp_send_events(table, &flow, TRUE, ACK, 111, 501, 1000, 10,
+                    INET_TCP_EVENT_INVALID_TIMESTAMP, TRUE);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_same_ports()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    /* With the same port at both ends the address identifies the client */
+    tcp_test_setup(GUINT_TO_POINTER(ETH_PROTOCOL_IP));
+    TEST_DPORT = TEST_SPORT;
+    flow = tcp_establish(table);
+    tcp_send_events(table, &flow, FALSE, SYN, 300, 0, 1000, 0, INET_TCP_EVENT_SYN_WRONG_DIR,
+                    TRUE);
+    tcp_send_ok(table, &flow, FALSE, ACK, 501, 101, 1000, 10, INET_TCP_STATE_ESTABLISHED);
+    TEST_DPORT = _TEST_DPORT;
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_not_tcp()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    len = make_udp_pkt(test_buffer, ETH_PROTOCOL_IP, 4);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0,
+                                           FLOW_GET | INET_FLOW_TCP_TRACK, &pkt)));
+    g_assert_false(pkt.tcp.invalid);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_NONE);
+    inet_flow_table_unref(table);
+}
+
+/* Send an IPv4 TCP segment between the given ends and track it */
+static gboolean tcp_send_addr(InetFlowTable * table, InetFlow ** flow, guint32 saddr,
+                              guint16 sport, guint32 daddr, guint16 dport, guint16 flags,
+                              guint32 seq, guint32 ack, guint payload_len,
+                              InetPacket * pkt)
+{
+    guint8 *ip = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    guint8 *tcp = build_hdr_ipv4(ip, IP_PROTOCOL_TCP, FALSE);
+    guint8 *p = build_tcp_segment(tcp, FALSE, flags, seq, ack, 1000, NULL) + payload_len;
+
+    ((ip_hdr_t *) ip)->saddr = g_htonl(saddr);
+    ((ip_hdr_t *) ip)->daddr = g_htonl(daddr);
+    ((ip_hdr_t *) ip)->tot_len = g_htons(p - ip);
+    ((tcp_hdr_t *) tcp)->source = g_htons(sport);
+    ((tcp_hdr_t *) tcp)->destination = g_htons(dport);
+    *flow = inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0,
+                          FLOW_GET | INET_FLOW_TCP_TRACK, pkt);
+    g_assert_nonnull(*flow);
+    return !pkt->tcp.invalid;
+}
+
+#define NAT_ADDR    0x0a0b0c0d
+#define NAT_PORT    5555
+
+/* Link the private flow to a public flow where the client is NAT_ADDR:NAT_PORT */
+static InetFlow *tcp_link_public(InetFlowTable * table, InetFlow * private)
+{
+    guint32 server = g_htonl(TEST_DADDR), nat = g_htonl(NAT_ADDR);
+    InetTuple tuple;
+    InetFlow *public;
+
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_TCP, &server, g_htons(TEST_DPORT), &nat,
+                   g_htons(NAT_PORT));
+    public = inet_flow_lookup(table, &tuple) ? : inet_flow_create(table, &tuple, 0);
+    g_assert_nonnull(public);
+    inet_flow_tcp_link(private, public, &tuple.dst, tuple.dport);
+    return public;
+}
+
+void test_tcp_link()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *private, *public, *flow;
+    InetPacket pkt;
+
+    setup_test();
+    /* The client SYN on the private flow */
+    g_assert_true(tcp_send_addr(table, &private, TEST_SADDR, TEST_SPORT, TEST_DADDR,
+                                TEST_DPORT, SYN, 100, 0, 0, &pkt));
+    public = tcp_link_public(table, private);
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_SYN_SENT);
+
+    /* The server SYN/ACK on the public flow */
+    g_assert_true(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                SYN_ACK, 500, 101, 0, &pkt));
+    g_assert(flow == public);
+    g_assert_cmphex(pkt.tcp.events, ==, 0);
+    g_assert_cmpint(inet_flow_tcp_state(private), ==, INET_TCP_STATE_SYN_RECV);
+
+    g_assert_true(tcp_send_addr(table, &flow, TEST_SADDR, TEST_SPORT, TEST_DADDR,
+                                TEST_DPORT, ACK, 101, 501, 10, &pkt));
+    g_assert(flow == private);
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_ESTABLISHED);
+
+    /* Data from the server is checked against the client data on the other flow */
+    g_assert_true(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                ACK, 501, 111, 20, &pkt));
+    g_assert_cmphex(pkt.tcp.events, ==, 0);
+    g_assert_false(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                 ACK, 521, 900, 0, &pkt));
+    g_assert_cmphex(pkt.tcp.events, ==, INET_TCP_EVENT_INVALID_ACK);
+
+    /* Each flow holds a reference to the shared state */
+    inet_flow_unref(private);
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_ESTABLISHED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_link_replaces_state()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *private, *public, *flow;
+    InetPacket pkt;
+
+    setup_test();
+    g_assert_true(tcp_send_addr(table, &private, TEST_SADDR, TEST_SPORT, TEST_DADDR,
+                                TEST_DPORT, SYN, 100, 0, 0, &pkt));
+    /* The SYN/ACK arrives on the public flow before the flows are linked */
+    g_assert_false(tcp_send_addr(table, &public, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                 SYN_ACK, 500, 101, 0, &pkt));
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_ONE_SIDED);
+    g_assert(tcp_link_public(table, private) == public);
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_SYN_SENT);
+    g_assert_true(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                SYN_ACK, 500, 101, 0, &pkt));
+    g_assert_cmpint(inet_flow_tcp_state(private), ==, INET_TCP_STATE_SYN_RECV);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_link_before_syn()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *private, *public, *flow;
+    InetPacket pkt;
+    guint32 client = g_htonl(TEST_SADDR), server = g_htonl(TEST_DADDR);
+    InetTuple tuple;
+
+    setup_test();
+    /* Link two flows before either has seen a packet */
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_TCP, &client, g_htons(TEST_SPORT), &server,
+                   g_htons(TEST_DPORT));
+    g_assert_nonnull((private = inet_flow_create(table, &tuple, 0)));
+    public = tcp_link_public(table, private);
+    g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_NONE);
+
+    g_assert_true(tcp_send_addr(table, &flow, TEST_SADDR, TEST_SPORT, TEST_DADDR,
+                                TEST_DPORT, SYN, 100, 0, 0, &pkt));
+    g_assert(flow == private);
+    g_assert_true(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
+                                SYN_ACK, 500, 101, 0, &pkt));
+    g_assert(flow == public);
+    g_assert_cmpint(inet_flow_tcp_state(private), ==, INET_TCP_STATE_SYN_RECV);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_handshake_paths(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    tcp_test_setup(data);
+    /* Simultaneous open: a SYN from each end */
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN, 500, 0, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    inet_flow_table_unref(table);
+
+    /* The client starts again with a new initial sequence number */
+    table = inet_flow_table_new();
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, TRUE, SYN, 300, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0,
+                    INET_TCP_EVENT_SYNACK_WRONG_ACK, TRUE);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 301, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    inet_flow_table_unref(table);
+
+    /* The client aborts before the handshake completes */
+    table = inet_flow_table_new();
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, RST, 101, 0, 0, 0, INET_TCP_STATE_CLOSED);
+    inet_flow_table_unref(table);
+}
+
+void test_tcp_track_malformed()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    /* A TCP header with a data offset below the minimum is not tracked */
+    len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IP, FALSE, SYN, 100, 0, 1000, NULL);
+    ((tcp_hdr_t *) (test_buffer + len - sizeof(tcp_hdr_t)))->flags = g_htons(0x4000 | SYN);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0,
+                                           FLOW_GET | INET_FLOW_TCP_TRACK, &pkt)));
+    g_assert_false(pkt.tcp.invalid);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_NONE);
+    inet_flow_table_unref(table);
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -3532,6 +4100,62 @@ int main(int argc, char *argv[])
                          test_fragment_no_list);
     g_test_add_data_func("/fragment/no_list/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
                          test_fragment_no_list);
+
+    g_test_add_data_func("/tcp/track/client_close/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_client_close);
+    g_test_add_data_func("/tcp/track/client_close/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_client_close);
+    g_test_add_data_func("/tcp/track/server_close/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_server_close);
+    g_test_add_data_func("/tcp/track/server_close/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_server_close);
+    g_test_add_data_func("/tcp/track/simultaneous_close/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_simultaneous_close);
+    g_test_add_data_func("/tcp/track/simultaneous_close/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_simultaneous_close);
+    g_test_add_data_func("/tcp/track/untracked/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_untracked);
+    g_test_add_data_func("/tcp/track/untracked/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_untracked);
+    g_test_add_data_func("/tcp/track/one_sided/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_one_sided);
+    g_test_add_data_func("/tcp/track/one_sided/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_one_sided);
+    g_test_add_data_func("/tcp/track/handshake_errors/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_handshake_errors);
+    g_test_add_data_func("/tcp/track/handshake_errors/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_handshake_errors);
+    g_test_add_data_func("/tcp/track/handshake_rst/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_handshake_rst);
+    g_test_add_data_func("/tcp/track/handshake_rst/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_handshake_rst);
+    g_test_add_data_func("/tcp/track/established/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_established);
+    g_test_add_data_func("/tcp/track/established/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_established);
+    g_test_add_data_func("/tcp/track/data_after_fin/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_data_after_fin);
+    g_test_add_data_func("/tcp/track/data_after_fin/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_data_after_fin);
+    g_test_add_data_func("/tcp/track/window_scale/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_window_scale);
+    g_test_add_data_func("/tcp/track/window_scale/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_window_scale);
+    g_test_add_data_func("/tcp/track/timestamps/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_timestamps);
+    g_test_add_data_func("/tcp/track/timestamps/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_tcp_track_timestamps);
+    g_test_add_func("/tcp/track/same_ports", test_tcp_track_same_ports);
+    g_test_add_func("/tcp/track/not_tcp", test_tcp_track_not_tcp);
+    g_test_add_func("/tcp/link", test_tcp_link);
+    g_test_add_func("/tcp/link/replaces_state", test_tcp_link_replaces_state);
+    g_test_add_func("/tcp/link/before_syn", test_tcp_link_before_syn);
+
+    g_test_add_data_func("/tcp/track/handshake_paths/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_tcp_track_handshake_paths);
+    g_test_add_data_func("/tcp/track/handshake_paths/ipv6",
+                         GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_handshake_paths);
+    g_test_add_func("/tcp/track/malformed", test_tcp_track_malformed);
 
     rc = g_test_run();
     return rc;

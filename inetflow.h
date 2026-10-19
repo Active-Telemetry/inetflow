@@ -118,6 +118,7 @@ typedef struct _InetFlow {
     gpointer context;
     guint64 inbytes;
     guint64 outbytes;
+    struct _InetTcpFlow *tcp;   /* Created by INET_FLOW_TCP_TRACK */
 } InetFlow;
 
 #define inet_flow_protocol(flow) flow->tuple.protocol
@@ -168,6 +169,43 @@ typedef enum {
 #define INET_TCP_OPT_SACK                   (1 << 3)
 #define INET_TCP_OPT_TIMESTAMP              (1 << 4)
 
+/* TCP connection states reported in InetPacket.tcp.state */
+typedef enum {
+    INET_TCP_STATE_NONE,        /* No packet has been tracked */
+    INET_TCP_STATE_UNTRACKED,   /* First seen after the handshake, so not tracked */
+    INET_TCP_STATE_ONE_SIDED,   /* Only one direction of the handshake was seen */
+    INET_TCP_STATE_SYN_SENT,
+    INET_TCP_STATE_SYN_RECV,
+    INET_TCP_STATE_ESTABLISHED,
+    INET_TCP_STATE_FIN_WAIT1,
+    INET_TCP_STATE_FIN_WAIT2,
+    INET_TCP_STATE_CLOSING,
+    INET_TCP_STATE_TIME_WAIT,
+    INET_TCP_STATE_CLOSE_WAIT,
+    INET_TCP_STATE_LAST_ACK,
+    INET_TCP_STATE_CLOSED,
+} InetTcpConnState;
+
+/* TCP events reported in InetPacket.tcp.events */
+#define INET_TCP_EVENT_ONE_SIDED            (1 << 0)    /* Only one direction is seen */
+#define INET_TCP_EVENT_SYN_WRONG_DIR        (1 << 1)    /* SYN from the server */
+#define INET_TCP_EVENT_SYNACK_WRONG_DIR     (1 << 2)    /* SYN/ACK from the client */
+#define INET_TCP_EVENT_ACK_WRONG_DIR        (1 << 3)    /* Server ACK before the handshake ends */
+#define INET_TCP_EVENT_SYN_RESEND           (1 << 4)    /* SYN sent again (valid in handshake) */
+#define INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ  (1 << 5)    /* SYN sent again with another sequence */
+#define INET_TCP_EVENT_SYNACK_RESEND        (1 << 6)    /* SYN/ACK sent again (valid in handshake) */
+#define INET_TCP_EVENT_SYNACK_RESEND_DIFF_ACK (1 << 7)  /* SYN/ACK sent again with another ACK */
+#define INET_TCP_EVENT_SYNACK_RESEND_DIFF_SEQ (1 << 8)  /* SYN/ACK sent again with another sequence */
+#define INET_TCP_EVENT_SYNACK_WRONG_ACK     (1 << 9)    /* SYN/ACK does not acknowledge the SYN */
+#define INET_TCP_EVENT_WRONG_SEQ            (1 << 10)   /* Sequence number is not the expected one */
+#define INET_TCP_EVENT_INVALID_ACK          (1 << 11)   /* ACK for data that has not been sent */
+#define INET_TCP_EVENT_RIGHT_SEQ_WRONG_ACK  (1 << 12)   /* Handshake ACK has the wrong ACK number */
+#define INET_TCP_EVENT_OUT_OF_WINDOW        (1 << 13)   /* Data beyond the receive window */
+#define INET_TCP_EVENT_INVALID_RST          (1 << 14)   /* RST outside the receive window */
+#define INET_TCP_EVENT_INVALID_TIMESTAMP    (1 << 15)   /* Timestamp missing or older than the last */
+#define INET_TCP_EVENT_RETRANSMISSION       (1 << 16)   /* Data sent again (valid) */
+#define INET_TCP_EVENT_BEFORE_LAST_ACK      (1 << 17)   /* Data already acknowledged (valid) */
+
 /* InetPacket */
 typedef struct _InetPacket {
     InetPacketStatus status;
@@ -189,6 +227,9 @@ typedef struct _InetPacket {
         guint16 mss;            /* Maximum segment size option */
         guint32 ts_val;         /* Timestamp option value */
         guint32 ts_ecr;         /* Timestamp option echo reply */
+        InetTcpConnState state; /* Connection state before the packet, with TCP_TRACK */
+        guint32 events;         /* INET_TCP_EVENT_ flags, with INET_FLOW_TCP_TRACK */
+        gboolean invalid;       /* Invalid for the connection state, with TCP_TRACK */
     } tcp;
 } InetPacket;
 
@@ -211,6 +252,9 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
                         guint64 timestamp, guint32 flags, InetPacket * pkt);
 InetFlow *inet_flow_lookup(InetFlowTable * table, InetTuple * tuple);
 InetFlow *inet_flow_create(InetFlowTable * table, InetTuple * tuple, uint64_t timestamp);
+InetTcpConnState inet_flow_tcp_state(InetFlow * flow);
+void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
+                        guint16 client_port);
 InetFlow *inet_flow_expire(InetFlowTable * table, guint64 ts);
 void inet_flow_establish(InetFlowTable * table, InetFlow * flow);
 void inet_flow_close(InetFlowTable * table, InetFlow * flow);
