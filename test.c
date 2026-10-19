@@ -2928,6 +2928,176 @@ void test_flow_get_table_full()
     inet_flow_table_unref(table);
 }
 
+/* Look up a frame in a new table and return the anomalies reported for it */
+static guint32 frame_anomalies(guint len, gboolean expect_flow)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    InetFlow *flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt);
+
+    g_assert(expect_flow == (flow != NULL));
+    inet_flow_table_unref(table);
+    return pkt.anomalies;
+}
+
+static guint make_udp_pkt(guint8 * buffer, guint16 eth_protocol, guint payload_len)
+{
+    guint8 *ip = build_hdr_eth(buffer, eth_protocol);
+    guint8 *udp = build_hdr_ip(ip, eth_protocol, IP_PROTOCOL_UDP, FALSE);
+    guint8 *p = build_hdr_udp(udp, FALSE) + payload_len;
+
+    ((udp_hdr_t *) udp)->length = g_htons(p - udp);
+    if (eth_protocol == ETH_PROTOCOL_IP)
+        ((ip_hdr_t *) ip)->tot_len = g_htons(p - ip);
+    else
+        ((ip6_hdr_t *) ip)->pay_len = g_htons(p - ip - sizeof(ip6_hdr_t));
+    return (guint) (p - buffer);
+}
+
+void test_anomaly_none()
+{
+    setup_test();
+    guint len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IP, FALSE, SYN, 1, 0, 1, "x");
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
+    len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IPV6, FALSE, SYN, 1, 0, 1, "x");
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
+    len = make_udp_pkt(test_buffer, ETH_PROTOCOL_IP, 4);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
+    len = make_udp_pkt(test_buffer, ETH_PROTOCOL_IPV6, 4);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
+}
+
+void test_anomaly_ip_version()
+{
+    setup_test();
+    guint len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IP, FALSE, SYN, 1, 0, 1, NULL);
+    ((ip_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->ihl_version = 0x55;
+    g_assert_cmphex(frame_anomalies(len, FALSE), ==, INET_ANOMALY_IP_VERSION);
+}
+
+void test_anomaly_ipv4()
+{
+    setup_test();
+    ip_hdr_t *ip = (ip_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t));
+    guint len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IP, FALSE, SYN, 1, 0, 1, "abcd");
+
+    /* Frame ends inside the fixed header */
+    g_assert_cmphex(frame_anomalies(sizeof(ethernet_hdr_t) + 10, FALSE), ==,
+                    INET_ANOMALY_IPV4_TRUNCATED);
+
+    /* Frame ends before the total length */
+    g_assert_cmphex(frame_anomalies(len - 2, TRUE), ==, INET_ANOMALY_IPV4_TRUNCATED);
+
+    /* Total length shorter than the header */
+    ip->tot_len = g_htons(10);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, INET_ANOMALY_IPV4_LEN_TOO_SMALL);
+    ip->tot_len = g_htons(len - sizeof(ethernet_hdr_t));
+
+    /* Header length below the minimum */
+    ip->ihl_version = 0x44;
+    g_assert_cmphex(frame_anomalies(len, FALSE), ==, INET_ANOMALY_IPV4_HLEN_TOO_SMALL);
+
+    /* Header length past the end of the frame */
+    ip->ihl_version = 0x4f;
+    g_assert_cmphex(frame_anomalies(sizeof(ethernet_hdr_t) + 40, FALSE), ==,
+                    INET_ANOMALY_IPV4_TRUNCATED);
+}
+
+void test_anomaly_ipv6()
+{
+    guint8 *p;
+
+    setup_test();
+    guint len = make_tcp_pkt(test_buffer, ETH_PROTOCOL_IPV6, FALSE, SYN, 1, 0, 1, "abcd");
+
+    /* Frame ends inside the fixed header */
+    g_assert_cmphex(frame_anomalies(sizeof(ethernet_hdr_t) + 20, FALSE), ==,
+                    INET_ANOMALY_IPV6_TRUNCATED);
+
+    /* Frame ends before the payload length */
+    g_assert_cmphex(frame_anomalies(len - 2, TRUE), ==, INET_ANOMALY_IPV6_TRUNCATED);
+
+    /* Extension header past the end of the frame */
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
+    p = build_hdr_ipv6(p, IP_PROTOCOL_DEST_OPT, FALSE);
+    ((ip6_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->pay_len = 0;
+    p = build_hdr_ipv6_part(p, IP_PROTOCOL_TCP);
+    len = (guint) (p - test_buffer);
+    g_assert_cmphex(frame_anomalies(len - 8, FALSE), ==,
+                    INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
+}
+
+void test_anomaly_tcp(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    guint ip_hdr_len = eth_protocol == ETH_PROTOCOL_IP ? sizeof(ip_hdr_t) : sizeof(ip6_hdr_t);
+    tcp_hdr_t *tcp = (tcp_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t) + ip_hdr_len);
+    guint len;
+
+    setup_test();
+
+    /* Data offset below the minimum */
+    len = make_tcp_pkt(test_buffer, eth_protocol, FALSE, SYN, 1, 0, 1, "abcd");
+    tcp->flags = g_htons(0x4000 | SYN);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, INET_ANOMALY_TCP_HLEN_TOO_SMALL);
+
+    /* Data offset past the end of the packet */
+    tcp->flags = g_htons(0xf000 | SYN);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, INET_ANOMALY_TCP_TRUNCATED);
+
+    /* Fixed header past the end of the packet */
+    len = make_tcp_pkt(test_buffer, eth_protocol, FALSE, SYN, 1, 0, 1, NULL);
+    if (eth_protocol == ETH_PROTOCOL_IP)
+        ((ip_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->tot_len = 0;
+    else
+        ((ip6_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->pay_len = 0;
+    g_assert_cmphex(frame_anomalies(len - 4, FALSE) & ~INET_ANOMALY_IPV4_LEN_TOO_SMALL, ==,
+                    INET_ANOMALY_TCP_TRUNCATED);
+}
+
+void test_anomaly_udp(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    guint ip_hdr_len = eth_protocol == ETH_PROTOCOL_IP ? sizeof(ip_hdr_t) : sizeof(ip6_hdr_t);
+    udp_hdr_t *udp = (udp_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t) + ip_hdr_len);
+    guint len;
+
+    setup_test();
+    len = make_udp_pkt(test_buffer, eth_protocol, 4);
+
+    /* Length field below the header size */
+    udp->length = g_htons(4);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, INET_ANOMALY_UDP_LEN_INVALID);
+
+    /* Length field past the end of the packet */
+    udp->length = g_htons(100);
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, INET_ANOMALY_UDP_LEN_INVALID);
+
+    /* Header past the end of the packet */
+    if (eth_protocol == ETH_PROTOCOL_IP)
+        ((ip_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->tot_len = 0;
+    else
+        ((ip6_hdr_t *) (test_buffer + sizeof(ethernet_hdr_t)))->pay_len = 0;
+    g_assert_cmphex(frame_anomalies(len - 8, FALSE) & ~INET_ANOMALY_IPV4_LEN_TOO_SMALL, ==,
+                    INET_ANOMALY_UDP_TRUNCATED);
+}
+
+void test_anomaly_udp_fragment()
+{
+    guint8 *p;
+    guint len;
+
+    setup_test();
+    /* The UDP length of a first fragment covers data in later fragments */
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    ip_hdr_t *ip = (ip_hdr_t *) p;
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
+    ((udp_hdr_t *) (p - sizeof(udp_hdr_t)))->length = g_htons(1000);
+    len = (guint) (p - test_buffer);
+    ip->tot_len = g_htons(len - sizeof(ethernet_hdr_t));
+    g_assert_cmphex(frame_anomalies(len, TRUE), ==, 0);
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -3069,6 +3239,20 @@ int main(int argc, char *argv[])
                          test_packet_fragment);
     g_test_add_func("/flow/get/not_found", test_flow_get_not_found);
     g_test_add_func("/flow/get/table_full", test_flow_get_table_full);
+
+    g_test_add_func("/anomaly/none", test_anomaly_none);
+    g_test_add_func("/anomaly/ip_version", test_anomaly_ip_version);
+    g_test_add_func("/anomaly/ipv4", test_anomaly_ipv4);
+    g_test_add_func("/anomaly/ipv6", test_anomaly_ipv6);
+    g_test_add_data_func("/anomaly/tcp/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_anomaly_tcp);
+    g_test_add_data_func("/anomaly/tcp/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_anomaly_tcp);
+    g_test_add_data_func("/anomaly/udp/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_anomaly_udp);
+    g_test_add_data_func("/anomaly/udp/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_anomaly_udp);
+    g_test_add_func("/anomaly/udp/fragment", test_anomaly_udp_fragment);
 
     rc = g_test_run();
     return rc;

@@ -411,6 +411,11 @@ static gboolean flow_compare(InetFlow * f1, InetFlow * f2)
     return inet_tuple_equal(&f1->tuple, &f2->tuple);
 }
 
+static inline void set_anomaly(InetPacket * pkt, guint32 anomaly)
+{
+    pkt->anomalies |= anomaly;
+}
+
 static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length,
                         guint32 hdr_len)
 {
@@ -426,8 +431,10 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
     guint16 offset_flags;
     guint32 hdr_len;
 
-    if (length < sizeof(tcp_hdr_t))
+    if (length < sizeof(tcp_hdr_t)) {
+        set_anomaly(pkt, INET_ANOMALY_TCP_TRUNCATED);
         return FALSE;
+    }
 
     pkt->tuple.sport = tcp->source;
     pkt->tuple.dport = tcp->destination;
@@ -437,7 +444,11 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
     pkt->tcp.seq = GUINT32_FROM_BE(tcp->seq);
     pkt->tcp.ack = GUINT32_FROM_BE(tcp->ack);
     pkt->tcp.window = GUINT16_FROM_BE(tcp->window);
-    if (hdr_len >= sizeof(tcp_hdr_t))
+    if (hdr_len < sizeof(tcp_hdr_t))
+        set_anomaly(pkt, INET_ANOMALY_TCP_HLEN_TOO_SMALL);
+    else if (hdr_len > length)
+        set_anomaly(pkt, INET_ANOMALY_TCP_TRUNCATED);
+    else
         set_payload(pkt, data, length, hdr_len);
     return TRUE;
 }
@@ -445,8 +456,14 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
 static gboolean flow_parse_udp(InetPacket * pkt, const guint8 * data, guint32 length)
 {
     udp_hdr_t *udp = (udp_hdr_t *) data;
-    if (length < sizeof(udp_hdr_t))
+    if (length < sizeof(udp_hdr_t)) {
+        set_anomaly(pkt, INET_ANOMALY_UDP_TRUNCATED);
         return FALSE;
+    }
+    /* The UDP length covers the whole datagram, which a fragment does not hold */
+    if (GUINT16_FROM_BE(udp->length) < sizeof(udp_hdr_t) ||
+        (!pkt->fragment && GUINT16_FROM_BE(udp->length) > length))
+        set_anomaly(pkt, INET_ANOMALY_UDP_LEN_INVALID);
 
     pkt->tuple.sport = udp->source;
     pkt->tuple.dport = udp->destination;
@@ -520,15 +537,29 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     InetTuple *f = &pkt->tuple;
     ip_hdr_t *iph = (ip_hdr_t *) data;
     guint32 hdr_len;
+    guint16 tot_len;
 
-    if (length < sizeof(ip_hdr_t))
+    if (length < sizeof(ip_hdr_t)) {
+        set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
         return FALSE;
+    }
     hdr_len = (iph->ihl_version & 0x0f) * FOUR_BYTE_UNITS;
-    if (hdr_len < sizeof(ip_hdr_t) || length < hdr_len)
+    if (hdr_len < sizeof(ip_hdr_t)) {
+        set_anomaly(pkt, INET_ANOMALY_IPV4_HLEN_TOO_SMALL);
         return FALSE;
-    /* Ignore link layer padding after the end of the IP packet */
-    if (GUINT16_FROM_BE(iph->tot_len) >= hdr_len && GUINT16_FROM_BE(iph->tot_len) < length)
-        length = GUINT16_FROM_BE(iph->tot_len);
+    }
+    if (length < hdr_len) {
+        set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
+        return FALSE;
+    }
+    tot_len = GUINT16_FROM_BE(iph->tot_len);
+    if (tot_len < hdr_len)
+        set_anomaly(pkt, INET_ANOMALY_IPV4_LEN_TOO_SMALL);
+    else if (tot_len > length)
+        set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
+    else
+        /* Ignore link layer padding after the end of the IP packet */
+        length = tot_len;
     set_headers(pkt, data,
                 (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0 ? data + hdr_len : NULL);
     pkt->fragment = (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) != 0;
@@ -599,12 +630,18 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     auth_hdr_t *auth_hdr;
     ipv6_partial_ext_hdr_t *ipv6_part_hdr;
 
-    if (length < sizeof(ip6_hdr_t))
+    if (length < sizeof(ip6_hdr_t)) {
+        set_anomaly(pkt, INET_ANOMALY_IPV6_TRUNCATED);
         return FALSE;
+    }
     /* Ignore link layer padding after the end of the IP packet. A payload
      * length of zero means a jumbogram, where the length is in an option. */
-    if (iph->pay_len && sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len) < length)
-        length = sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len);
+    if (iph->pay_len) {
+        if (sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len) > length)
+            set_anomaly(pkt, INET_ANOMALY_IPV6_TRUNCATED);
+        else
+            length = sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len);
+    }
     set_headers(pkt, data, NULL);
     pkt->fragment = FALSE;
 
@@ -660,18 +697,21 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     case IP_PROTOCOL_MOBILITY:
     case IP_PROTOCOL_HIPV2:
     case IP_PROTOCOL_SHIM6:
-        if (length < sizeof(ipv6_partial_ext_hdr_t))
+        if (length < sizeof(ipv6_partial_ext_hdr_t)
+            || length < get_hdr_len(((ipv6_partial_ext_hdr_t *) data)->hdr_ext_len)) {
+            set_anomaly(pkt, INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
             return FALSE;
+        }
         ipv6_part_hdr = (ipv6_partial_ext_hdr_t *) data;
-        if (length < get_hdr_len(ipv6_part_hdr->hdr_ext_len))
-            return FALSE;
         inet_tuple_set_protocol(f, ipv6_part_hdr->next_hdr);
         data += get_hdr_len(ipv6_part_hdr->hdr_ext_len);
         length -= get_hdr_len(ipv6_part_hdr->hdr_ext_len);
         goto next_header;
     case IP_PROTOCOL_FRAGMENT:
-        if (length < sizeof(frag_hdr_t))
+        if (length < sizeof(frag_hdr_t)) {
+            set_anomaly(pkt, INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
             return FALSE;
+        }
         fragment_hdr = (frag_hdr_t *) data;
         inet_tuple_set_protocol(f, fragment_hdr->next_hdr);
         pkt->fragment = TRUE;
@@ -689,11 +729,13 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
 
         goto next_header;
     case IP_PROTOCOL_AUTH:
-        if (length < sizeof(auth_hdr_t))
+        if (length < sizeof(auth_hdr_t)
+            || length < (((auth_hdr_t *) data)->payload_len + AH_HEADER_LEN_ADD)
+            * FOUR_BYTE_UNITS) {
+            set_anomaly(pkt, INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
             return FALSE;
+        }
         auth_hdr = (auth_hdr_t *) data;
-        if (length < (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS)
-            return FALSE;
         inet_tuple_set_protocol(f, auth_hdr->next_hdr);
         data += (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
         length -= (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
@@ -745,6 +787,7 @@ static gboolean flow_parse_ip(InetPacket * pkt, const guint8 * data, guint32 len
             return FALSE;
     } else {
         DEBUG("Unsupported ip version: %d\n", version);
+        set_anomaly(pkt, INET_ANOMALY_IP_VERSION);
         return FALSE;
     }
     return TRUE;

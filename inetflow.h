@@ -131,6 +131,18 @@ typedef enum {
     INET_PACKET_FRAG_UNTRACKED, /* The fragment list is full */
 } InetPacketStatus;
 
+/* Header anomalies reported in InetPacket.anomalies */
+#define INET_ANOMALY_IP_VERSION             (1 << 0)    /* IP version is not 4 or 6 */
+#define INET_ANOMALY_IPV4_TRUNCATED         (1 << 1)    /* Frame ends inside the IPv4 packet */
+#define INET_ANOMALY_IPV4_HLEN_TOO_SMALL    (1 << 2)    /* IHL is less than 5 */
+#define INET_ANOMALY_IPV4_LEN_TOO_SMALL     (1 << 3)    /* Total length is less than the IHL */
+#define INET_ANOMALY_IPV6_TRUNCATED         (1 << 4)    /* Frame ends inside the IPv6 packet */
+#define INET_ANOMALY_IPV6_EXTHDR_TRUNCATED  (1 << 5)    /* Extension header extends past the packet */
+#define INET_ANOMALY_TCP_TRUNCATED          (1 << 6)    /* TCP header extends past the packet */
+#define INET_ANOMALY_TCP_HLEN_TOO_SMALL     (1 << 7)    /* TCP data offset is less than 5 */
+#define INET_ANOMALY_UDP_TRUNCATED          (1 << 8)    /* UDP header extends past the packet */
+#define INET_ANOMALY_UDP_LEN_INVALID        (1 << 9)    /* UDP length is less than 8 or too long */
+
 /* InetPacket */
 typedef struct _InetPacket {
     InetPacketStatus status;
@@ -141,6 +153,7 @@ typedef struct _InetPacket {
     guint32 payload_length;     /* Bytes of payload, excluding link layer padding */
     guint8 direction;           /* InetFlowDirection, set when the flow is updated */
     gboolean fragment;          /* The packet is a fragment of a larger datagram */
+    guint32 anomalies;          /* INET_ANOMALY_ flags for malformed headers */
     struct {
         guint16 flags;          /* FIN is bit 0, NS is bit 8 */
         guint16 window;         /* Not scaled */
