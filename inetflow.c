@@ -180,93 +180,92 @@ static inline guint64 get_time_us(void)
         return 0;
 }
 
-static int sock_address_comparison(struct sockaddr_storage *a, struct sockaddr_storage *b)
+static int addr_compare(const InetTuple * tuple, const InetAddr * a, const InetAddr * b)
 {
-    if (((struct sockaddr_in *)a)->sin_family != ((struct sockaddr_in *)b)->sin_family) {
-        return 1;
-    }
+    return memcmp(a, b, tuple->family == AF_INET ? sizeof(a->v4) : sizeof(a->v6));
+}
 
-    if (((struct sockaddr_in *)a)->sin_family == AF_INET) {
-        struct sockaddr_in *a_v4 = (struct sockaddr_in *)a;
-        struct sockaddr_in *b_v4 = (struct sockaddr_in *)b;
-        return memcmp(&a_v4->sin_addr, &b_v4->sin_addr, sizeof(a_v4->sin_addr));
+void inet_tuple_set(InetTuple * tuple, guint8 family, guint8 protocol, const void *src,
+                    guint16 sport, const void *dst, guint16 dport)
+{
+    size_t len = family == AF_INET ? sizeof(struct in_addr) : sizeof(struct in6_addr);
+
+    memset(tuple, 0, sizeof(*tuple));
+    tuple->family = family;
+    tuple->protocol = protocol;
+    memcpy(&tuple->src, src, len);
+    memcpy(&tuple->dst, dst, len);
+    tuple->sport = sport;
+    tuple->dport = dport;
+}
+
+static gboolean tuple_src_is_server(const InetTuple * tuple)
+{
+    guint16 sport = GUINT16_FROM_BE(tuple->sport);
+    guint16 dport = GUINT16_FROM_BE(tuple->dport);
+
+    return sport < dport ||
+        (sport == dport && addr_compare(tuple, &tuple->src, &tuple->dst) < 0);
+}
+
+const InetAddr *inet_tuple_server_addr(const InetTuple * tuple)
+{
+    return tuple_src_is_server(tuple) ? &tuple->src : &tuple->dst;
+}
+
+guint16 inet_tuple_server_port(const InetTuple * tuple)
+{
+    return tuple_src_is_server(tuple) ? tuple->sport : tuple->dport;
+}
+
+const InetAddr *inet_tuple_client_addr(const InetTuple * tuple)
+{
+    return tuple_src_is_server(tuple) ? &tuple->dst : &tuple->src;
+}
+
+guint16 inet_tuple_client_port(const InetTuple * tuple)
+{
+    return tuple_src_is_server(tuple) ? tuple->dport : tuple->sport;
+}
+
+void inet_tuple_to_sockaddr(const InetTuple * tuple, gboolean src,
+                            struct sockaddr_storage *out)
+{
+    const InetAddr *addr = src ? &tuple->src : &tuple->dst;
+    guint16 port = src ? tuple->sport : tuple->dport;
+
+    memset(out, 0, sizeof(*out));
+    if (tuple->family == AF_INET) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)out;
+        sin->sin_family = AF_INET;
+        sin->sin_addr = addr->v4;
+        sin->sin_port = port;
     } else {
-        struct sockaddr_in6 *a_v6 = (struct sockaddr_in6 *)a;
-        struct sockaddr_in6 *b_v6 = (struct sockaddr_in6 *)b;
-        return memcmp(&a_v6->sin6_addr, &b_v6->sin6_addr, sizeof(a_v6->sin6_addr));
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)out;
+        sin6->sin6_family = AF_INET6;
+        sin6->sin6_addr = addr->v6;
+        sin6->sin6_port = port;
     }
 }
 
-/* Order the ends of a tuple by port, and by address when the ports are equal,
- * so that both directions of a flow give the same order */
-struct sockaddr_storage *inet_tuple_get_lower(InetTuple * tuple)
+gboolean inet_tuple_equal(const InetTuple * a, const InetTuple * b)
 {
-    guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
-    guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
-    if (sport < dport ||
-        (sport == dport && sock_address_comparison(&tuple->src, &tuple->dst) < 0))
-        return &tuple->src;
-    else
-        return &tuple->dst;
+    if (a->protocol != b->protocol || a->family != b->family) {
+        return FALSE;
+    }
+    return addr_compare(a, inet_tuple_server_addr(a), inet_tuple_server_addr(b)) == 0 &&
+        inet_tuple_server_port(a) == inet_tuple_server_port(b) &&
+        addr_compare(a, inet_tuple_client_addr(a), inet_tuple_client_addr(b)) == 0 &&
+        inet_tuple_client_port(a) == inet_tuple_client_port(b);
 }
 
-struct sockaddr_storage *inet_tuple_get_upper(InetTuple * tuple)
+gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b)
 {
-    guint16 sport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->src)->sin_port);
-    guint16 dport = GUINT16_FROM_BE(((struct sockaddr_in *)&tuple->dst)->sin_port);
-    if (dport > sport ||
-        (dport == sport && sock_address_comparison(&tuple->dst, &tuple->src) > 0))
-        return &tuple->dst;
-    else
-        return &tuple->src;
-}
-
-gboolean inet_tuple_equal(InetTuple * a, InetTuple * b)
-{
-    if (a->protocol != b->protocol) {
+    if (a->protocol != b->protocol || a->family != b->family) {
         return FALSE;
     }
-
-    struct sockaddr_storage *lower_a = inet_tuple_get_lower(a);
-    struct sockaddr_storage *upper_a = inet_tuple_get_upper(a);
-    struct sockaddr_storage *lower_b = inet_tuple_get_lower(b);
-    struct sockaddr_storage *upper_b = inet_tuple_get_upper(b);
-
-    if (sock_address_comparison(lower_a, lower_b)) {
-        return FALSE;
-    }
-    if (((struct sockaddr_in *)lower_a)->sin_port !=
-        ((struct sockaddr_in *)lower_b)->sin_port) {
-        return FALSE;
-    }
-    if (sock_address_comparison(upper_a, upper_b)) {
-        return FALSE;
-    }
-    if (((struct sockaddr_in *)upper_a)->sin_port !=
-        ((struct sockaddr_in *)upper_b)->sin_port) {
-        return FALSE;
-    }
-    return TRUE;
-}
-
-gboolean inet_tuple_exact(InetTuple * a, InetTuple * b)
-{
-    if (a->protocol != b->protocol) {
-        return FALSE;
-    }
-
-    struct sockaddr_storage *src_a = &a->src;
-    struct sockaddr_storage *dst_a = &a->dst;
-    struct sockaddr_storage *src_b = &b->src;
-    struct sockaddr_storage *dst_b = &b->dst;
-
-    if (sock_address_comparison(src_a, src_b)) {
-        return FALSE;
-    }
-    if (sock_address_comparison(dst_a, dst_b)) {
-        return FALSE;
-    }
-    return TRUE;
+    return addr_compare(a, &a->src, &b->src) == 0 && a->sport == b->sport &&
+        addr_compare(a, &a->dst, &b->dst) == 0 && a->dport == b->dport;
 }
 
 guint inet_tuple_hash(InetTuple * tuple)
@@ -274,11 +273,8 @@ guint inet_tuple_hash(InetTuple * tuple)
     if (tuple->hash)
         return tuple->hash;
 
-    struct sockaddr_storage *lower = inet_tuple_get_lower(tuple);
-    struct sockaddr_storage *upper = inet_tuple_get_upper(tuple);
-
-    guint16 lport = GUINT16_FROM_BE(((struct sockaddr_in *)lower)->sin_port);
-    guint16 uport = GUINT16_FROM_BE(((struct sockaddr_in *)upper)->sin_port);
+    guint16 lport = GUINT16_FROM_BE(inet_tuple_server_port(tuple));
+    guint16 uport = GUINT16_FROM_BE(inet_tuple_client_port(tuple));
     tuple->hash = lport << 16 | uport;
 
     return tuple->hash;
@@ -296,8 +292,9 @@ static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
     /* A datagram is identified by its source, destination, protocol and ID,
      * so a fragment in the other direction belongs to another datagram. The
      * ports are not in non-first fragments, so only the addresses are compared. */
-    if (sock_address_comparison(&entry->tuple.src, &f->tuple.src) == 0
-        && sock_address_comparison(&entry->tuple.dst, &f->tuple.dst) == 0) {
+    if (entry->tuple.family == f->tuple.family
+        && addr_compare(&f->tuple, &entry->tuple.src, &f->tuple.src) == 0
+        && addr_compare(&f->tuple, &entry->tuple.dst, &f->tuple.dst) == 0) {
         return 0;
     }
     return 1;
@@ -367,18 +364,8 @@ gboolean inet_frag_list_update(InetFragList * fragments, InetFragment * entry,
 
     InetFragment *found_flow = match->data;
 
-    /* Match source port / address etc - could be either way around */
-    if (found_flow->tuple.src.ss_family == AF_INET) {
-        ((struct sockaddr_in *)&entry->tuple.src)->sin_port =
-            ((struct sockaddr_in *)&found_flow->tuple.src)->sin_port;
-        ((struct sockaddr_in *)&entry->tuple.dst)->sin_port =
-            ((struct sockaddr_in *)&found_flow->tuple.dst)->sin_port;
-    } else {
-        ((struct sockaddr_in6 *)&entry->tuple.src)->sin6_port =
-            ((struct sockaddr_in6 *)&found_flow->tuple.src)->sin6_port;
-        ((struct sockaddr_in6 *)&entry->tuple.dst)->sin6_port =
-            ((struct sockaddr_in6 *)&found_flow->tuple.dst)->sin6_port;
-    }
+    entry->tuple.sport = found_flow->tuple.sport;
+    entry->tuple.dport = found_flow->tuple.dport;
     /* If this is the last IP fragment (MF is unset), clean up the list */
     if (!more_fragments) {
         fragments->head = g_list_remove_link(fragments->head, match);
@@ -432,8 +419,8 @@ static gboolean flow_parse_tcp(InetTuple * f, const guint8 * data, guint32 lengt
     if (length < sizeof(tcp_hdr_t))
         return FALSE;
 
-    ((struct sockaddr_in *)&f->src)->sin_port = tcp->source;
-    ((struct sockaddr_in *)&f->dst)->sin_port = tcp->destination;
+    f->sport = tcp->source;
+    f->dport = tcp->destination;
 
     if (flags) {
         *flags = GUINT16_FROM_BE(tcp->flags);
@@ -447,8 +434,8 @@ static gboolean flow_parse_udp(InetTuple * f, const guint8 * data, guint32 lengt
     if (length < sizeof(udp_hdr_t))
         return FALSE;
 
-    ((struct sockaddr_in *)&f->src)->sin_port = udp->source;
-    ((struct sockaddr_in *)&f->dst)->sin_port = udp->destination;
+    f->sport = udp->source;
+    f->dport = udp->destination;
 
     return TRUE;
 }
@@ -459,8 +446,8 @@ static gboolean flow_parse_sctp(InetTuple * f, const guint8 * data, guint32 leng
     if (length < sizeof(sctp_hdr_t))
         return FALSE;
 
-    ((struct sockaddr_in *)&f->src)->sin_port = sctp->source;
-    ((struct sockaddr_in *)&f->dst)->sin_port = sctp->destination;
+    f->sport = sctp->source;
+    f->dport = sctp->destination;
 
     return TRUE;
 }
@@ -519,13 +506,11 @@ static gboolean flow_parse_ipv4(InetTuple * f, const guint8 * data, guint32 leng
         *iphr = data;
     }
 
-    ((struct sockaddr_in *)&f->src)->sin_family = AF_INET;
-    ((struct sockaddr_in *)&f->dst)->sin_family = AF_INET;
-
-    memcpy(&((struct sockaddr_in *)&f->src)->sin_addr, (char *)&iph->saddr,
-           sizeof(((struct sockaddr_in *) & f->src)->sin_addr));
-    memcpy(&((struct sockaddr_in *)&f->dst)->sin_addr, (char *)&iph->daddr,
-           sizeof(((struct sockaddr_in *) & f->dst)->sin_addr));
+    f->family = AF_INET;
+    memset(&f->src, 0, sizeof(f->src));
+    memset(&f->dst, 0, sizeof(f->dst));
+    memcpy(&f->src.v4, &iph->saddr, sizeof(f->src.v4));
+    memcpy(&f->dst.v4, &iph->daddr, sizeof(f->dst.v4));
 
     DEBUG("Protocol: %d\n", iph->protocol);
     inet_tuple_set_protocol(f, iph->protocol);
@@ -551,8 +536,8 @@ static gboolean flow_parse_ipv4(InetTuple * f, const guint8 * data, guint32 leng
             break;
         case IP_PROTOCOL_ICMP:
         default:
-            ((struct sockaddr_in *)&f->src)->sin_port = 0;
-            ((struct sockaddr_in *)&f->dst)->sin_port = 0;
+            f->sport = 0;
+            f->dport = 0;
             break;
         }
     }
@@ -590,12 +575,9 @@ static gboolean flow_parse_ipv6(InetTuple * f, const guint8 * data, guint32 leng
     if (iphr)
         *iphr = data;
 
-    ((struct sockaddr_in *)&f->src)->sin_family = AF_INET6;
-    ((struct sockaddr_in *)&f->dst)->sin_family = AF_INET6;
-    memcpy(&((struct sockaddr_in6 *)&f->src)->sin6_addr, (char *)&iph->saddr,
-           sizeof(((struct sockaddr_in6 *) & f->src)->sin6_addr));
-    memcpy(&((struct sockaddr_in6 *)&f->dst)->sin6_addr, (char *)&iph->daddr,
-           sizeof(((struct sockaddr_in6 *) & f->dst)->sin6_addr));
+    f->family = AF_INET6;
+    memcpy(&f->src.v6, iph->saddr, sizeof(f->src.v6));
+    memcpy(&f->dst.v6, iph->daddr, sizeof(f->dst.v6));
     inet_tuple_set_protocol(f, iph->next_hdr);
 
     data += sizeof(ip6_hdr_t);
@@ -1021,7 +1003,7 @@ InetFlow *inet_flow_get_full(InetFlowTable * table,
         flow->list.data = flow;
         /* Set default lifetime before processing further - this may be over written */
         flow->lifetime = INET_FLOW_DEFAULT_NEW_TIMEOUT;
-        flow->family = packet.family;
+        flow->family = packet.tuple.family;
         flow->direction = packet.direction;
         flow->hash = packet.hash;
         flow->tuple = packet.tuple;
@@ -1058,7 +1040,7 @@ InetFlow *inet_flow_create(InetFlowTable * table, InetTuple * tuple, uint64_t ti
     flow->list.data = flow;
     /* Set default lifetime before processing further */
     flow->lifetime = INET_FLOW_DEFAULT_NEW_TIMEOUT;
-    flow->family = ((struct sockaddr *)&(tuple->src))->sa_family;
+    flow->family = tuple->family;
     flow->hash = inet_tuple_hash(tuple);
     flow->tuple = *tuple;
     g_hash_table_replace(table->table, (gpointer) flow, (gpointer) flow);

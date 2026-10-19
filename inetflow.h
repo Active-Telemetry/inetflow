@@ -41,25 +41,38 @@ typedef enum {
 #define INET_FLOW_LIFETIME_COUNT              3
 
 /* InetTuple */
+typedef union _InetAddr {
+    struct in_addr v4;
+    struct in6_addr v6;
+    guint8 bytes[16];
+} InetAddr;
+
 typedef struct _InetTuple {
-    struct sockaddr_storage src;
-    struct sockaddr_storage dst;
-    guint16 protocol;
-    guint16 offset;
-    guint hash;
+    InetAddr src;               /* IPv4 uses the first 4 bytes */
+    InetAddr dst;
+    guint16 sport;              /* Network byte order */
+    guint16 dport;              /* Network byte order */
+    guint8 family;              /* AF_INET or AF_INET6 */
+    guint8 protocol;
+    guint16 offset;             /* Offset of the transport header in the frame */
+    guint32 hash;
 } InetTuple;
 
-#define inet_tuple_get_src_port(tuple) ((struct sockaddr_in *) &(tuple)->src)->sin_port
-#define inet_tuple_get_dst_port(tuple) ((struct sockaddr_in *) &(tuple)->dst)->sin_port
-struct sockaddr_storage *inet_tuple_get_lower(InetTuple * tuple);
-struct sockaddr_storage *inet_tuple_get_upper(InetTuple * tuple);
-#define inet_tuple_get_server inet_tuple_get_lower
-#define inet_tuple_get_client inet_tuple_get_upper
-gboolean inet_tuple_equal(InetTuple * a, InetTuple * b);
-gboolean inet_tuple_exact(InetTuple * a, InetTuple * b);
-#define inet_tuple_family(tuple) ((struct sockaddr_in *)&(tuple)->src)->sin_family
+#define inet_tuple_family(tuple) (tuple)->family
 #define inet_tuple_get_protocol(tuple) (tuple)->protocol
 #define inet_tuple_set_protocol(tuple, proto) (tuple)->protocol = proto
+#define inet_tuple_get_src_port(tuple) (tuple)->sport
+#define inet_tuple_get_dst_port(tuple) (tuple)->dport
+void inet_tuple_set(InetTuple * tuple, guint8 family, guint8 protocol, const void *src,
+                    guint16 sport, const void *dst, guint16 dport);
+const InetAddr *inet_tuple_server_addr(const InetTuple * tuple);
+guint16 inet_tuple_server_port(const InetTuple * tuple);
+const InetAddr *inet_tuple_client_addr(const InetTuple * tuple);
+guint16 inet_tuple_client_port(const InetTuple * tuple);
+void inet_tuple_to_sockaddr(const InetTuple * tuple, gboolean src,
+                            struct sockaddr_storage *out);
+gboolean inet_tuple_equal(const InetTuple * a, const InetTuple * b);
+gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b);
 guint inet_tuple_hash(InetTuple * tuple);
 
 /* InetFragList */

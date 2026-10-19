@@ -241,7 +241,6 @@ static void process_pcap(const char *filename)
 
 static void print_flow(InetFlow * flow, gpointer data)
 {
-    struct sockaddr_in *lip, *uip;
     char lips[INET6_ADDRSTRLEN];
     char uips[INET6_ADDRSTRLEN];
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
@@ -251,12 +250,14 @@ static void print_flow(InetFlow * flow, gpointer data)
         proto = "";
 #endif
 
-    lip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
-    uip = (struct sockaddr_in *)inet_tuple_get_upper(&flow->tuple);
-    inet_ntop(inet_tuple_family(&flow->tuple), &lip->sin_addr, lips, INET6_ADDRSTRLEN);
-    inet_ntop(inet_tuple_family(&flow->tuple), &uip->sin_addr, uips, INET6_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_server_addr(&flow->tuple), lips,
+              INET6_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_client_addr(&flow->tuple), uips,
+              INET6_ADDRSTRLEN);
     g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5zu %-7zu %-7zu  %s %s\r\n",
-             flow->hash, uips, lips, inet_flow_protocol(flow), uip->sin_port, lip->sin_port,
+             flow->hash, uips, lips, inet_flow_protocol(flow),
+             g_ntohs(inet_tuple_client_port(&flow->tuple)),
+             g_ntohs(inet_tuple_server_port(&flow->tuple)),
              flow->packets, flow->inbytes, flow->outbytes,
              flow->state == FLOW_NEW ? "NEW   " : (flow->state ==
                                                    FLOW_OPEN ? "OPEN  " : "CLOSED"),

@@ -911,9 +911,9 @@ void test_flow_parse_ipv4_options()
     guint len = (guint) (p - test_buffer);
 
     g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, FALSE));
-    g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->src)->sin_port, ==,
+    g_assert_cmpuint(test_tuple->sport, ==,
                      htons(TEST_SPORT));
-    g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->dst)->sin_port, ==,
+    g_assert_cmpuint(test_tuple->dport, ==,
                      htons(TEST_DPORT));
     g_assert_cmpuint(test_tuple->offset, ==, sizeof(ethernet_hdr_t) + sizeof(ip_hdr_t) + 8);
 }
@@ -1108,9 +1108,6 @@ void test_flow_properties()
 {
     InetFlowTable *table;
     InetFlow *flow;
-    struct sockaddr_in *lip;
-    struct sockaddr_in *uip;
-    struct sockaddr_in *sip;
 
     setup_test();
 
@@ -1131,20 +1128,14 @@ void test_flow_properties()
     g_assert(flow->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
-    lip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
-    uip = (struct sockaddr_in *)inet_tuple_get_upper(&flow->tuple);
-    sip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
-    g_assert_nonnull(lip);
-    g_assert_nonnull(uip);
-    g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(sip->sin_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(uip->sin_port, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_client_port(&flow->tuple), ==, htons(TEST_DPORT));
 
-    g_assert(((struct sockaddr_in *)lip)->sin_addr.s_addr == htonl(TEST_SADDR));
-    g_assert(((struct sockaddr_in *)sip)->sin_addr.s_addr == htonl(TEST_SADDR));
-    g_assert(((struct sockaddr_in *)uip)->sin_addr.s_addr == htonl(TEST_DADDR));
+    g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
+    g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
+    g_assert(inet_tuple_client_addr(&flow->tuple)->v4.s_addr == htonl(TEST_DADDR));
 
     inet_flow_unref(flow);
     inet_flow_table_unref(table);
@@ -1154,9 +1145,6 @@ void test_flow_properties_reversed()
 {
     InetFlowTable *table;
     InetFlow *flow;
-    struct sockaddr_in *lip;
-    struct sockaddr_in *uip;
-    struct sockaddr_in *sip;
 
     setup_test();
 
@@ -1177,20 +1165,14 @@ void test_flow_properties_reversed()
     g_assert(flow->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
-    lip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
-    uip = (struct sockaddr_in *)inet_tuple_get_upper(&flow->tuple);
-    sip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
-    g_assert_nonnull(lip);
-    g_assert_nonnull(uip);
-    g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(sip->sin_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(uip->sin_port, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_client_port(&flow->tuple), ==, htons(TEST_DPORT));
 
-    g_assert(lip->sin_addr.s_addr == htonl(TEST_SADDR));
-    g_assert(sip->sin_addr.s_addr == htonl(TEST_SADDR));
-    g_assert(uip->sin_addr.s_addr == htonl(TEST_DADDR));
+    g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
+    g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
+    g_assert(inet_tuple_client_addr(&flow->tuple)->v4.s_addr == htonl(TEST_DADDR));
 
     inet_flow_unref(flow);
     inet_flow_table_unref(table);
@@ -1200,9 +1182,6 @@ void test_flow_properties_ipv6()
 {
     InetFlowTable *table;
     InetFlow *flow;
-    struct sockaddr_in6 *lip;
-    struct sockaddr_in6 *uip;
-    struct sockaddr_in6 *sip;
 
     setup_test();
 
@@ -1223,20 +1202,14 @@ void test_flow_properties_ipv6()
     g_assert(flow->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
-    lip = (struct sockaddr_in6 *)inet_tuple_get_lower(&flow->tuple);
-    uip = (struct sockaddr_in6 *)inet_tuple_get_upper(&flow->tuple);
-    sip = (struct sockaddr_in6 *)inet_tuple_get_lower(&flow->tuple);
-    g_assert_nonnull(lip);
-    g_assert_nonnull(uip);
-    g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(uip->sin6_port, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_client_port(&flow->tuple), ==, htons(TEST_DPORT));
 
-    g_assert(memcmp(&lip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
-    g_assert(memcmp(&sip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
-    g_assert(memcmp(&uip->sin6_addr, test_ip6dst, sizeof(test_ip6dst)) == 0);
+    g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
+    g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
+    g_assert(memcmp(inet_tuple_client_addr(&flow->tuple), test_ip6dst, sizeof(test_ip6dst)) == 0);
 
     inet_flow_unref(flow);
     inet_flow_table_unref(table);
@@ -1247,9 +1220,6 @@ void test_flow_properties_ipv6_reversed()
 {
     InetFlowTable *table;
     InetFlow *flow;
-    struct sockaddr_in6 *lip;
-    struct sockaddr_in6 *uip;
-    struct sockaddr_in6 *sip;
 
     setup_test();
 
@@ -1270,20 +1240,14 @@ void test_flow_properties_ipv6_reversed()
     g_assert(flow->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
-    lip = (struct sockaddr_in6 *)inet_tuple_get_lower(&flow->tuple);
-    uip = (struct sockaddr_in6 *)inet_tuple_get_upper(&flow->tuple);
-    sip = (struct sockaddr_in6 *)inet_tuple_get_lower(&flow->tuple);
-    g_assert_nonnull(lip);
-    g_assert_nonnull(uip);
-    g_assert_nonnull(sip);
 
-    g_assert_cmpuint(lip->sin6_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(sip->sin6_port, ==, htons(TEST_SPORT));
-    g_assert_cmpuint(uip->sin6_port, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_server_port(&flow->tuple), ==, htons(TEST_SPORT));
+    g_assert_cmpuint(inet_tuple_client_port(&flow->tuple), ==, htons(TEST_DPORT));
 
-    g_assert(memcmp(&lip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
-    g_assert(memcmp(&sip->sin6_addr, test_ip6src, sizeof(test_ip6src)) == 0);
-    g_assert(memcmp(&uip->sin6_addr, test_ip6dst, sizeof(test_ip6dst)) == 0);
+    g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
+    g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
+    g_assert(memcmp(inet_tuple_client_addr(&flow->tuple), test_ip6dst, sizeof(test_ip6dst)) == 0);
 
     inet_flow_unref(flow);
     inet_flow_table_unref(table);
@@ -1323,13 +1287,11 @@ void test_flow_table_properties()
 void flow_print_protocol(InetFlow * flow)
 {
     guint protocol;
-    struct sockaddr_in *lip;
 
     g_assert_nonnull(flow);
-    lip = (struct sockaddr_in *)inet_tuple_get_lower(&flow->tuple);
     g_assert((inet_flow_protocol(flow) == IP_PROTOCOL_TCP) ||
              (inet_flow_protocol(flow) == IP_PROTOCOL_UDP));
-    g_assert_nonnull(lip);
+    g_assert_nonnull(inet_tuple_server_addr(&flow->tuple));
 }
 
 void test_flow_foreach()
@@ -2183,10 +2145,9 @@ static void set_tuple(InetTuple * tuple, int family, guint16 sport, guint16 dpor
 {
     memset(tuple, 0, sizeof(*tuple));
     tuple->protocol = IP_PROTOCOL_UDP;
-    tuple->src.ss_family = family;
-    tuple->dst.ss_family = family;
-    ((struct sockaddr_in *)&tuple->src)->sin_port = g_htons(sport);
-    ((struct sockaddr_in *)&tuple->dst)->sin_port = g_htons(dport);
+    tuple->family = family;
+    tuple->sport = g_htons(sport);
+    tuple->dport = g_htons(dport);
 }
 
 void test_tuple_equal_family()
@@ -2380,7 +2341,7 @@ void test_tuple_exact()
 
     /* Another destination address */
     b = a;
-    ((struct sockaddr_in *)&b.dst)->sin_addr.s_addr ^= 1;
+    b.dst.v4.s_addr ^= 1;
     g_assert_false(inet_tuple_exact(&a, &b));
 }
 
@@ -2416,7 +2377,7 @@ void test_flow_parse_gre_options()
             len = make_pkt_gre_flags(test_buffer, flags[i], protocols[j]);
             g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, TRUE));
             g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, IP_PROTOCOL_UDP);
-            g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->src)->sin_port, ==,
+            g_assert_cmpuint(test_tuple->sport, ==,
                              htons(TEST_SPORT));
 
             /* The inner packet ends inside its transport header */
@@ -2541,7 +2502,7 @@ void test_flow_parse_functions()
 
     /* A frame starting with Ethernet */
     g_assert(inet_flow_parse(test_buffer, len, NULL, &tuple, FALSE) == &tuple);
-    g_assert_cmpuint(((struct sockaddr_in *)&tuple.src)->sin_port, ==, htons(TEST_SPORT));
+    g_assert_cmpuint(tuple.sport, ==, htons(TEST_SPORT));
     g_assert_nonnull((result = inet_flow_parse(test_buffer, len, NULL, NULL, FALSE)));
     g_assert_true(inet_tuple_exact(result, &tuple));
     free(result);
@@ -2550,7 +2511,7 @@ void test_flow_parse_functions()
     memset(&tuple, 0, sizeof(tuple));
     g_assert(inet_flow_parse_ip(test_buffer + sizeof(ethernet_hdr_t),
                                 len - sizeof(ethernet_hdr_t), NULL, &tuple, FALSE) == &tuple);
-    g_assert_cmpuint(((struct sockaddr_in *)&tuple.dst)->sin_port, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(tuple.dport, ==, htons(TEST_DPORT));
     g_assert_nonnull((result = inet_flow_parse_ip(test_buffer + sizeof(ethernet_hdr_t),
                                                   len - sizeof(ethernet_hdr_t), NULL, NULL,
                                                   FALSE)));
@@ -2584,7 +2545,7 @@ void test_flow_create_lookup()
     /* No flow is created when the table is full */
     inet_flow_table_max_set(table, 1);
     other = tuple;
-    ((struct sockaddr_in *)&other.src)->sin_port = htons(1);
+    other.sport = htons(1);
     g_assert_null(inet_flow_create(table, &other, 0));
     g_assert_null(inet_flow_lookup(table, &other));
     inet_flow_table_unref(table);
@@ -2663,10 +2624,10 @@ void test_tuple_equal_mismatch()
 
     /* The upper end has the higher port, which is the destination */
     b = a;
-    ((struct sockaddr_in *)&b.dst)->sin_addr.s_addr ^= 1;
+    b.dst.v4.s_addr ^= 1;
     g_assert_false(inet_tuple_equal(&a, &b));
     b = a;
-    ((struct sockaddr_in *)&b.dst)->sin_port = htons(TEST_DPORT + 1);
+    b.dport = htons(TEST_DPORT + 1);
     g_assert_false(inet_tuple_equal(&a, &b));
 }
 
@@ -2788,6 +2749,75 @@ void test_flow_foreach_null()
     g_assert_cmpint(count, ==, 0);
 }
 
+void test_tuple_set_sockaddr(gconstpointer data)
+{
+    guint8 family = GPOINTER_TO_UINT(data);
+    guint8 src[16] = { 10, 0, 0, 1 }, dst[16] = { 10, 0, 0, 2 };
+    struct sockaddr_storage ss;
+    InetTuple tuple;
+
+    if (family == AF_INET6) {
+        memcpy(src, test_ip6src, sizeof(src));
+        memcpy(dst, test_ip6dst, sizeof(dst));
+    }
+    inet_tuple_set(&tuple, family, IP_PROTOCOL_TCP, src, htons(1234), dst, htons(80));
+    g_assert_cmpuint(inet_tuple_family(&tuple), ==, family);
+    g_assert_cmpuint(inet_tuple_get_protocol(&tuple), ==, IP_PROTOCOL_TCP);
+    g_assert_cmpuint(inet_tuple_get_src_port(&tuple), ==, htons(1234));
+    g_assert_cmpuint(inet_tuple_get_dst_port(&tuple), ==, htons(80));
+
+    inet_tuple_to_sockaddr(&tuple, TRUE, &ss);
+    g_assert_cmpuint(ss.ss_family, ==, family);
+    if (family == AF_INET) {
+        g_assert(memcmp(&((struct sockaddr_in *)&ss)->sin_addr, src, 4) == 0);
+        g_assert_cmpuint(((struct sockaddr_in *)&ss)->sin_port, ==, htons(1234));
+    } else {
+        g_assert(memcmp(&((struct sockaddr_in6 *)&ss)->sin6_addr, src, 16) == 0);
+        g_assert_cmpuint(((struct sockaddr_in6 *)&ss)->sin6_port, ==, htons(1234));
+    }
+    inet_tuple_to_sockaddr(&tuple, FALSE, &ss);
+    if (family == AF_INET) {
+        g_assert(memcmp(&((struct sockaddr_in *)&ss)->sin_addr, dst, 4) == 0);
+        g_assert_cmpuint(((struct sockaddr_in *)&ss)->sin_port, ==, htons(80));
+    } else {
+        g_assert(memcmp(&((struct sockaddr_in6 *)&ss)->sin6_addr, dst, 16) == 0);
+        g_assert_cmpuint(((struct sockaddr_in6 *)&ss)->sin6_port, ==, htons(80));
+    }
+}
+
+void test_tuple_server_client()
+{
+    guint8 a[4] = { 10, 0, 0, 1 }, b[4] = { 10, 0, 0, 2 };
+    InetTuple tuple;
+
+    /* The server is the end with the lower port */
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_TCP, a, htons(1234), b, htons(80));
+    g_assert_false(tuple_src_is_server(&tuple));
+    g_assert(inet_tuple_server_addr(&tuple) == &tuple.dst);
+    g_assert_cmpuint(inet_tuple_server_port(&tuple), ==, htons(80));
+    g_assert(inet_tuple_client_addr(&tuple) == &tuple.src);
+    g_assert_cmpuint(inet_tuple_client_port(&tuple), ==, htons(1234));
+
+    /* With equal ports the server is the end with the lower address */
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_UDP, a, htons(500), b, htons(500));
+    g_assert_true(tuple_src_is_server(&tuple));
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_UDP, b, htons(500), a, htons(500));
+    g_assert_false(tuple_src_is_server(&tuple));
+}
+
+void test_tuple_exact_ports()
+{
+    guint8 a[4] = { 10, 0, 0, 1 }, b[4] = { 10, 0, 0, 2 };
+    InetTuple t1, t2;
+
+    inet_tuple_set(&t1, AF_INET, IP_PROTOCOL_TCP, a, htons(1234), b, htons(80));
+    inet_tuple_set(&t2, AF_INET, IP_PROTOCOL_TCP, a, htons(1235), b, htons(80));
+    g_assert_false(inet_tuple_exact(&t1, &t2));
+    g_assert_false(inet_tuple_equal(&t1, &t2));
+    inet_tuple_set(&t2, AF_INET, IP_PROTOCOL_TCP, a, htons(1234), b, htons(81));
+    g_assert_false(inet_tuple_exact(&t1, &t2));
+}
+
 int main(int argc, char *argv[])
 {
     int rc;
@@ -2904,6 +2934,11 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/parse/malformed/mpls", test_flow_parse_malformed_mpls);
     g_test_add_func("/flow/parse/malformed/pppoe_hdr", test_flow_parse_malformed_pppoe);
     g_test_add_func("/flow/foreach/null", test_flow_foreach_null);
+
+    g_test_add_data_func("/tuple/set/ipv4", GUINT_TO_POINTER(AF_INET), test_tuple_set_sockaddr);
+    g_test_add_data_func("/tuple/set/ipv6", GUINT_TO_POINTER(AF_INET6), test_tuple_set_sockaddr);
+    g_test_add_func("/tuple/server_client", test_tuple_server_client);
+    g_test_add_func("/tuple/exact/ports", test_tuple_exact_ports);
 
     rc = g_test_run();
     return rc;

@@ -68,15 +68,11 @@ typedef struct host {
 static GHashTable* host_htable = NULL;
 
 static bool
-is_local_v4(struct sockaddr_storage *ss)
+is_local_v4(InetTuple *tuple, const InetAddr *addr)
 {
     //TODO
     // unsigned int mask = 0xFFFFFFFF << (32 - network_bits);
-    char lips[INET6_ADDRSTRLEN];
-    inet_ntop(((struct sockaddr_in *)ss)->sin_family, &((struct sockaddr_in *)ss)->sin_addr, lips, INET6_ADDRSTRLEN);
-    if (strncmp(lips, "192.168.", 8) == 0)
-        return TRUE;
-    return FALSE;
+    return inet_tuple_family(tuple) == AF_INET && addr->bytes[0] == 192 && addr->bytes[1] == 168;
 }
 
 static void update_host(InetTuple *tuple, uint32_t bytes)
@@ -84,26 +80,28 @@ static void update_host(InetTuple *tuple, uint32_t bytes)
     int family = inet_tuple_family(tuple);
     char lips[INET6_ADDRSTRLEN];
     char hostname[INET6_ADDRSTRLEN];
-    struct sockaddr_in *ip;
+    struct sockaddr_storage ip;
+    gboolean src;
     host *h;
 
-    if (is_local_v4(&tuple->src))
-        ip = (struct sockaddr_in *) &tuple->src;
-    else if (is_local_v4(&tuple->dst))
-        ip = (struct sockaddr_in *) &tuple->dst;
+    if (is_local_v4(tuple, &tuple->src))
+        src = TRUE;
+    else if (is_local_v4(tuple, &tuple->dst))
+        src = FALSE;
     else
         return;
-    inet_ntop(family, &ip->sin_addr, lips, INET6_ADDRSTRLEN);
+    inet_ntop(family, src ? &tuple->src : &tuple->dst, lips, INET6_ADDRSTRLEN);
+    inet_tuple_to_sockaddr(tuple, src, &ip);
 
     h = g_hash_table_lookup(host_htable, lips);
     if (!h) {
         h = g_malloc0(sizeof(host));
-        if (getnameinfo((const struct sockaddr *)ip, sizeof(*ip), h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
+        if (getnameinfo((const struct sockaddr *)&ip, sizeof(struct sockaddr_in), h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
             strncpy(h->name, lips, INET6_ADDRSTRLEN);
         }
         g_hash_table_insert(host_htable, g_strdup(lips), h);
     }
-    if (ip == (struct sockaddr_in *) &tuple->src)
+    if (src)
         h->outbytes += bytes;
     else
         h->inbytes += bytes;
