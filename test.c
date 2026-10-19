@@ -2717,6 +2717,44 @@ void test_table_hash_stored()
     inet_flow_table_free(table);
 }
 
+static guint make_ipv6_fragment(guint8 * buffer, gboolean more_fragments, guint16 offset, guint16 id)
+{
+    guint8 *p = build_hdr_eth(buffer, ETH_PROTOCOL_IPV6);
+
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP, FALSE, more_fragments, offset, id);
+    return (guint) (p - buffer);
+}
+
+void test_flow_fragment_atomic()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetPacket pkt;
+    guint len;
+    int i;
+
+    setup_test();
+    inet_flow_table_frag_limits_set(table, 2, 30);
+
+    /* Atomic fragments are whole datagrams, so they do not fill the fragment list */
+    for (i = 0; i < 4; i++) {
+        len = make_ipv6_fragment(test_buffer, FALSE, 0, i);
+        g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
+        g_assert_false(pkt.fragment);
+        g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
+        g_assert_nonnull(pkt.l4);
+    }
+    g_assert_null(table->frag_info_list->head);
+
+    /* An atomic fragment with the ID of a tracked datagram does not change it */
+    len = make_ipv6_fragment(test_buffer, TRUE, 0, 9);
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
+    len = make_ipv6_fragment(test_buffer, FALSE, 0, 9);
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
+    g_assert_cmpuint(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
+    g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
+    inet_flow_table_free(table);
+}
+
 void test_flow_fragment_mismatch()
 {
     InetFlowTable *table = inet_flow_table_new();
@@ -4181,6 +4219,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/tuple/hash", test_tuple_hash);
     g_test_add_func("/tuple/equal/directions", test_tuple_equal_directions);
     g_test_add_func("/flow/fragment/mismatch", test_flow_fragment_mismatch);
+    g_test_add_func("/flow/fragment/atomic", test_flow_fragment_atomic);
     g_test_add_func("/flow/parse/malformed/gre", test_flow_parse_malformed_gre);
     g_test_add_func("/flow/parse/malformed/ipv4_tcp", test_flow_parse_malformed_ipv4_tcp);
     g_test_add_func("/flow/parse/malformed/auth", test_flow_parse_malformed_auth_length);

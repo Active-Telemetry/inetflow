@@ -1030,8 +1030,16 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
             set_anomaly(pkt, INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
             return FALSE;
         }
+        inet_tuple_set_protocol(f, ((frag_hdr_t *) data)->next_hdr);
+        /* An atomic fragment, with offset 0 and no more fragments, holds a
+         * whole datagram. RFC 6946 requires it to be processed apart from
+         * other fragments with the same ID, so it is not tracked. */
+        if (!(GUINT16_FROM_BE(((frag_hdr_t *) data)->fo_res_mflag) & 0xFFF9)) {
+            data += sizeof(frag_hdr_t);
+            length -= sizeof(frag_hdr_t);
+            goto next_header;
+        }
         fragment_hdr = (frag_hdr_t *) data;
-        inet_tuple_set_protocol(f, fragment_hdr->next_hdr);
         pkt->fragment = TRUE;
 
         data += sizeof(frag_hdr_t);

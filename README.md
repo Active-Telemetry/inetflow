@@ -330,6 +330,9 @@ fragments in any order. A datagram is tracked until all of its data has been
 seen, or until it expires. By default the list holds 128 datagrams and each
 expires after 30 seconds. `inet_flow_table_frag_limits_set()` changes this.
 
+An IPv6 atomic fragment, with offset 0 and no more fragments, holds a whole
+datagram. It is not tracked, and `fragment` is FALSE for it.
+
 The library does not reassemble datagrams. Each fragment is returned as it
 arrives.
 
