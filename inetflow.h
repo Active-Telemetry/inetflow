@@ -114,6 +114,41 @@ typedef struct _InetFlow {
 #define inet_flow_protocol(flow) flow->tuple.protocol
 void inet_flow_unref(InetFlow * flow);
 
+/* Flags for inet_flow_get() and inet_packet_parse() */
+typedef enum {
+    INET_FLOW_L2 = 1 << 0,      /* The frame starts with Ethernet, else IP */
+    INET_FLOW_TUNNEL = 1 << 1,  /* Parse into GRE and IP in IP tunnels */
+    INET_FLOW_CREATE = 1 << 2,  /* Create the flow if it does not exist */
+    INET_FLOW_UPDATE = 1 << 3,  /* Update the flow state, counters and expiry */
+} InetFlowFlags;
+
+/* InetPacket status */
+typedef enum {
+    INET_PACKET_OK,
+    INET_PACKET_PARSE_ERROR,    /* The frame could not be parsed */
+    INET_PACKET_NOT_FOUND,      /* No flow, and INET_FLOW_CREATE was not set */
+    INET_PACKET_TABLE_FULL,     /* No flow, and the table is full */
+    INET_PACKET_FRAG_UNTRACKED, /* The fragment list is full */
+} InetPacketStatus;
+
+/* InetPacket */
+typedef struct _InetPacket {
+    InetPacketStatus status;
+    InetTuple tuple;
+    const guint8 *l3;           /* IP header */
+    const guint8 *l4;           /* Transport header, or NULL for non-first fragments */
+    const guint8 *payload;      /* Transport payload for TCP, UDP and SCTP, or NULL */
+    guint32 payload_length;     /* Bytes of payload, excluding link layer padding */
+    guint8 direction;           /* InetFlowDirection, set when the flow is updated */
+    gboolean fragment;          /* The packet is a fragment of a larger datagram */
+    struct {
+        guint16 flags;          /* FIN is bit 0, NS is bit 8 */
+        guint16 window;         /* Not scaled */
+        guint32 seq;            /* Host byte order */
+        guint32 ack;            /* Host byte order */
+    } tcp;
+} InetPacket;
+
 /* InetFlowTable */
 typedef struct _InetFlowTable {
     GHashTable *table;
@@ -127,16 +162,11 @@ typedef struct _InetFlowTable {
 InetFlowTable *inet_flow_table_new(void);
 #define inet_flow_table_size(table) g_hash_table_size(table->table)
 void inet_flow_table_max_set(InetFlowTable * table, guint64 value);
-InetTuple *inet_flow_parse(const guint8 * frame, guint length, InetFragList * fragments,
-                           InetTuple * result, gboolean inspect_tunnel);
-InetTuple *inet_flow_parse_ip(const guint8 * iphdr, guint length, InetFragList * fragments,
-                              InetTuple * result, gboolean inspect_tunnel);
+gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags,
+                           InetFragList * fragments, InetPacket * pkt);
+InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length,
+                        guint64 timestamp, guint32 flags, InetPacket * pkt);
 InetFlow *inet_flow_lookup(InetFlowTable * table, InetTuple * tuple);
-InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length);
-InetFlow *inet_flow_get_full(InetFlowTable * table, const guint8 * frame,
-                             guint length, guint16 hash, guint64 timestamp,
-                             gboolean update, gboolean l2, gboolean inspect_tunnel,
-                             const uint8_t ** iphr, InetTuple **);
 InetFlow *inet_flow_create(InetFlowTable * table, InetTuple * tuple, uint64_t timestamp);
 InetFlow *inet_flow_expire(InetFlowTable * table, guint64 ts);
 void inet_flow_establish(InetFlowTable * table, InetFlow * flow);

@@ -109,12 +109,12 @@ static void update_host(InetTuple *tuple, uint32_t bytes)
 
 static void process_frame(const uint8_t * frame, uint32_t length)
 {
-    InetTuple tuple = {0};
+    InetPacket pkt;
 
     frames++;
-    if (inet_flow_parse(frame, length, NULL, &tuple, FALSE) && (inet_tuple_family(&tuple) == AF_INET || inet_tuple_family(&tuple) == AF_INET6)) {
-        update_host(&tuple, length);
-        if (inet_tuple_family(&tuple) == AF_INET)
+    if (inet_packet_parse(frame, length, INET_FLOW_L2, NULL, &pkt) && (inet_tuple_family(&pkt.tuple) == AF_INET || inet_tuple_family(&pkt.tuple) == AF_INET6)) {
+        update_host(&pkt.tuple, length);
+        if (inet_tuple_family(&pkt.tuple) == AF_INET)
             ipv4++;
         else
             ipv6++;

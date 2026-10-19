@@ -134,9 +134,11 @@ static void analyse_frame(InetFlow * flow, const uint8_t * iph, uint32_t length)
 
 static void process_frame(const uint8_t * frame, uint32_t length)
 {
-    const uint8_t *iph = NULL;
-    InetFlow *flow =
-        inet_flow_get_full(table, frame, length, 0, 0, TRUE, TRUE, TRUE, &iph, NULL);
+    InetPacket pkt;
+    InetFlow *flow = inet_flow_get(table, frame, length, 0,
+                                   INET_FLOW_CREATE | INET_FLOW_UPDATE | INET_FLOW_L2 |
+                                   INET_FLOW_TUNNEL, &pkt);
+    const uint8_t *iph = pkt.l3;
     if (flow && iph) {
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
         if (dpi)
