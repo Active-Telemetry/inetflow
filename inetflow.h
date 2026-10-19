@@ -38,7 +38,6 @@ typedef enum {
 #define INET_FLOW_DEFAULT_NEW_TIMEOUT         30
 #define INET_FLOW_DEFAULT_OPEN_TIMEOUT        300
 #define INET_FLOW_DEFAULT_CLOSED_TIMEOUT      10
-#define INET_FLOW_LIFETIME_COUNT              3
 
 /* InetTuple */
 typedef union _InetAddr {
@@ -76,53 +75,26 @@ gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b);
 guint inet_tuple_hash(InetTuple * tuple);
 
 /* InetFragList */
-#define INET_FRAG_MAX_RANGES 8
-typedef struct _InetFragRange {
-    guint32 start;
-    guint32 end;
-} InetFragRange;
-typedef struct _InetFragment {
-    guint32 id;
-    InetTuple tuple;
-    guint64 timestamp;
-    guint32 offset;             /* Byte offset of the fragment data in the datagram */
-    guint32 length;             /* Bytes of data in the fragment */
-    guint32 anomalies;          /* INET_ANOMALY_FRAG_ flags for the fragment */
-    guint32 total;              /* Datagram length, or zero until the last fragment is seen */
-    guint8 nranges;             /* Ranges of the datagram seen so far */
-    InetFragRange ranges[INET_FRAG_MAX_RANGES];
-} InetFragment;
-typedef struct _InetFragList {
-    GRWLock lock;
-    GList *head;
-} InetFragList;
-
-InetFragList *inet_frag_list_new();
-void inet_frag_list_free(InetFragList * finished);
+#define INET_FRAG_DEFAULT_MAX                 128
+#define INET_FRAG_DEFAULT_TIMEOUT             30
+typedef struct _InetFragList InetFragList;
+InetFragList *inet_frag_list_new(guint max_datagrams, guint timeout_s);
+void inet_frag_list_free(InetFragList * fragments);
 
 /* InetFlow */
 typedef struct _InetFlow {
-    struct _InetFlowTable *table;
-    GList list;
-    guint64 timestamp;
-    guint64 lifetime;
-    guint64 packets;
+    InetTuple tuple;            /* The tuple of the first packet */
     InetFlowState state;
-    guint family;
-    guint32 hash;
-    guint16 flags;
-    guint8 direction;
-    guint16 server_port;
-    guint32 server_ip[4];
-    InetTuple tuple;
-    gpointer context;
-    guint64 inbytes;
-    guint64 outbytes;
-    struct _InetTcpFlow *tcp;   /* Created by INET_FLOW_TCP_TRACK */
+    guint8 direction;           /* InetFlowDirection of the last packet */
+    guint64 timestamp;          /* Time of the last packet */
+    guint64 packets;
+    guint64 inbytes;            /* Reply direction */
+    guint64 outbytes;           /* Original direction */
+    gpointer context;           /* Freed by the table context_free callback */
 } InetFlow;
 
-#define inet_flow_protocol(flow) flow->tuple.protocol
-void inet_flow_unref(InetFlow * flow);
+#define inet_flow_protocol(flow) (flow)->tuple.protocol
+void inet_flow_free(InetFlow * flow);
 
 /* Flags for inet_flow_get() and inet_packet_parse() */
 typedef enum {
@@ -234,32 +206,31 @@ typedef struct _InetPacket {
 } InetPacket;
 
 /* InetFlowTable */
-typedef struct _InetFlowTable {
-    GHashTable *table;
-    GQueue *expire_queue[INET_FLOW_LIFETIME_COUNT];
-    InetFragList *frag_info_list;
-    guint64 hits;
-    guint64 misses;
-    guint64 max;
-} InetFlowTable;
+typedef struct _InetFlowTable InetFlowTable;
+InetFlowTable *inet_flow_table_new(GDestroyNotify context_free);
+void inet_flow_table_free(InetFlowTable * table);
+guint inet_flow_table_size(InetFlowTable * table);
+void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows);
+void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s,
+                                  guint closed_s);
+void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams,
+                                     guint timeout_s);
 
-InetFlowTable *inet_flow_table_new(void);
-#define inet_flow_table_size(table) g_hash_table_size(table->table)
-void inet_flow_table_max_set(InetFlowTable * table, guint64 value);
 gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags,
                            InetFragList * fragments, InetPacket * pkt);
 InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length,
                         guint64 timestamp, guint32 flags, InetPacket * pkt);
-InetFlow *inet_flow_lookup(InetFlowTable * table, InetTuple * tuple);
-InetFlow *inet_flow_create(InetFlowTable * table, InetTuple * tuple, uint64_t timestamp);
-InetTcpConnState inet_flow_tcp_state(InetFlow * flow);
-void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
-                        guint16 client_port);
-InetFlow *inet_flow_expire(InetFlowTable * table, guint64 ts);
+InetFlow *inet_flow_lookup(InetFlowTable * table, const InetTuple * tuple);
+InetFlow *inet_flow_create(InetFlowTable * table, const InetTuple * tuple,
+                           guint64 timestamp);
+InetFlow *inet_flow_expire(InetFlowTable * table, guint64 timestamp);
 void inet_flow_establish(InetFlowTable * table, InetFlow * flow);
 void inet_flow_close(InetFlowTable * table, InetFlow * flow);
 typedef void (*IFFunc)(InetFlow * flow, gpointer user_data);
 void inet_flow_foreach(InetFlowTable * table, IFFunc func, gpointer user_data);
-void inet_flow_table_unref(InetFlowTable * table);
+
+InetTcpConnState inet_flow_tcp_state(InetFlow * flow);
+void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
+                        guint16 client_port);
 
 #endif                          /* __INET_FLOW_H__ */

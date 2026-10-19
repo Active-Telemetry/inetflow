@@ -21,8 +21,8 @@
 //#define DEBUG(fmt, args...) {g_printf("%s: ",__func__);g_printf (fmt, ## args);}
 #define CHECK_BIT(__v,__p) ((__v) & (1<<(__p)))
 #define TIMESTAMP_RESOLUTION_US     1000000
-#define FRAG_EXPIRY_TIME            30
-#define MAX_FRAG_DEPTH              128
+#define FRAG_EXPIRY_TIME            INET_FRAG_DEFAULT_TIMEOUT
+#define MAX_FRAG_DEPTH              INET_FRAG_DEFAULT_MAX
 #define TCP_FLAGS_MASK              0x01FF
 
 /* IP and TCP option kinds that have no length byte */
@@ -36,10 +36,71 @@
 #define TCP_OPT_SACK                5
 #define TCP_OPT_TIMESTAMP           8
 
-static int lifetime_values[] = {
+/* Flow lifetimes. Each lifetime has its own expiry queue. */
+enum {
+    LIFETIME_CLOSED,
+    LIFETIME_NEW,
+    LIFETIME_OPEN,
+    LIFETIME_COUNT,
+};
+
+static const guint default_timeouts[LIFETIME_COUNT] = {
     INET_FLOW_DEFAULT_CLOSED_TIMEOUT,
     INET_FLOW_DEFAULT_NEW_TIMEOUT,
     INET_FLOW_DEFAULT_OPEN_TIMEOUT,
+};
+
+struct _InetTcpFlow;
+
+/* The library allocates an InetFlowPriv for each flow and gives callers a
+ * pointer to the public part, which is first */
+typedef struct _InetFlowPriv {
+    InetFlow pub;
+    struct _InetFlowTable *table;
+    GList list;                 /* Link in the expiry queue of the lifetime */
+    guint8 lifetime;
+    guint16 flags;              /* TCP flags of the packet, for lookups */
+    guint16 server_port;
+    guint32 hash;
+    struct _InetTcpFlow *tcp;   /* Created by INET_FLOW_TCP_TRACK */
+} InetFlowPriv;
+
+#define FLOW_PRIV(flow) ((InetFlowPriv *) (flow))
+
+#define INET_FRAG_MAX_RANGES 8
+typedef struct _InetFragRange {
+    guint32 start;
+    guint32 end;
+} InetFragRange;
+
+typedef struct _InetFragment {
+    guint32 id;
+    InetTuple tuple;
+    guint64 timestamp;
+    guint32 offset;             /* Byte offset of the fragment data in the datagram */
+    guint32 length;             /* Bytes of data in the fragment */
+    guint32 anomalies;          /* INET_ANOMALY_FRAG_ flags for the fragment */
+    guint32 total;              /* Datagram length, or zero until the last fragment is seen */
+    guint8 nranges;             /* Ranges of the datagram seen so far */
+    InetFragRange ranges[INET_FRAG_MAX_RANGES];
+} InetFragment;
+
+struct _InetFragList {
+    GRWLock lock;
+    GList *head;
+    guint max;
+    guint64 timeout_us;
+};
+
+struct _InetFlowTable {
+    GHashTable *table;
+    GQueue *expire_queue[LIFETIME_COUNT];
+    guint64 timeout_us[LIFETIME_COUNT];
+    InetFragList *frag_info_list;
+    GDestroyNotify context_free;
+    guint64 hits;
+    guint64 misses;
+    guint64 max;
 };
 
 /* Packet */
@@ -313,11 +374,12 @@ static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
     return 1;
 }
 
-static gboolean frag_is_expired(InetFragment * frag_info, guint64 timestamp)
+static gboolean frag_is_expired(InetFragList * list, InetFragment * frag_info,
+                                guint64 timestamp)
 {
     /* Caller supplied timestamps can go backwards, which is not expiry */
     if (timestamp > frag_info->timestamp &&
-        timestamp - frag_info->timestamp > FRAG_EXPIRY_TIME * TIMESTAMP_RESOLUTION_US)
+        timestamp - frag_info->timestamp > list->timeout_us)
         return TRUE;
     return FALSE;
 }
@@ -328,8 +390,7 @@ static guint16 clear_expired_frag_info(InetFragList * frag_info_list, guint64 ti
     GList *l = frag_info_list->head;
     while (l != NULL) {
         GList *next = l->next;
-        if (frag_is_expired(l->data, timestamp)) {
-            struct frag_info *frag_info = (struct frag_info *)(l->data);
+        if (frag_is_expired(frag_info_list, l->data, timestamp)) {
             free(l->data);
             frag_info_list->head = g_list_delete_link(frag_info_list->head, l);
             cleared += 1;
@@ -376,7 +437,7 @@ static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guin
 {
     uint64_t timestamp = ts ? : get_time_us();
 
-    if (g_list_length(fragments->head) >= MAX_FRAG_DEPTH) {
+    if (g_list_length(fragments->head) >= fragments->max) {
         if (clear_expired_frag_info(fragments, timestamp) == 0) {
             DEBUG("Fragment tracking limit reached\n");
             f->anomalies |= INET_ANOMALY_FRAG_LIMIT;
@@ -410,7 +471,7 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
 
     g_rw_lock_writer_lock(&fragments->lock);
     match = g_list_find_custom(fragments->head, entry, find_flow_by_frag_info);
-    if (match && frag_is_expired(match->data, entry->timestamp ? : get_time_us())) {
+    if (match && frag_is_expired(fragments, match->data, entry->timestamp ? : get_time_us())) {
         entry->anomalies |= INET_ANOMALY_FRAG_EXPIRED;
         free(match->data);
         fragments->head = g_list_delete_link(fragments->head, match);
@@ -451,19 +512,27 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
     return result;
 }
 
-void inet_frag_list_free(InetFragList * finished)
+void inet_frag_list_free(InetFragList * fragments)
 {
-    g_rw_lock_writer_lock(&finished->lock);
-    g_list_free_full(finished->head, free);
-    g_rw_lock_writer_unlock(&finished->lock);
-    g_rw_lock_clear(&finished->lock);
-    free(finished);
+    g_rw_lock_writer_lock(&fragments->lock);
+    g_list_free_full(fragments->head, free);
+    g_rw_lock_writer_unlock(&fragments->lock);
+    g_rw_lock_clear(&fragments->lock);
+    free(fragments);
 }
 
-InetFragList *inet_frag_list_new()
+static void frag_list_limits_set(InetFragList * fragments, guint max_datagrams,
+                                 guint timeout_s)
+{
+    fragments->max = max_datagrams;
+    fragments->timeout_us = (guint64) timeout_s * TIMESTAMP_RESOLUTION_US;
+}
+
+InetFragList *inet_frag_list_new(guint max_datagrams, guint timeout_s)
 {
     InetFragList *new_list = calloc(1, sizeof(InetFragList));
     g_rw_lock_init(&new_list->lock);
+    frag_list_limits_set(new_list, max_datagrams, timeout_s);
     return new_list;
 }
 
@@ -472,19 +541,19 @@ static guint32 get_hdr_len(guint8 hdr_ext_len)
     return (hdr_ext_len + IPV6_FIRST_8_OCTETS) * EIGHT_OCTET_UNITS;
 }
 
-static guint32 flow_hash(InetFlow * f)
+static guint32 flow_hash(InetFlowPriv * f)
 {
     if (f->hash)
         return f->hash;
 
-    f->hash = inet_tuple_hash(&f->tuple);
+    f->hash = inet_tuple_hash(&f->pub.tuple);
 
     return f->hash;
 }
 
-static gboolean flow_compare(InetFlow * f1, InetFlow * f2)
+static gboolean flow_compare(InetFlowPriv * f1, InetFlowPriv * f2)
 {
-    return inet_tuple_equal(&f1->tuple, &f2->tuple);
+    return inet_tuple_equal(&f1->pub.tuple, &f2->pub.tuple);
 }
 
 static inline void set_anomaly(InetPacket * pkt, guint32 anomaly)
@@ -1067,54 +1136,35 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
     return TRUE;
 }
 
-enum {
-    FLOW_STATE = 1,
-    FLOW_PACKETS,
-    FLOW_HASH,
-    FLOW_PROTOCOL,
-    FLOW_LPORT,
-    FLOW_UPORT,
-    FLOW_SERVER_PORT,
-    FLOW_LIP,
-    FLOW_UIP,
-    FLOW_SERVER_IP,
-    FLOW_TUPLE,
-    FLOW_DIRECTION,
-    FLOW_LIFETIME,
-    FLOW_TIMESTAMP,
-};
 
-static int find_expiry_index(guint64 lifetime)
+static void remove_flow_by_expiry(InetFlowPriv * flow)
 {
-    int i;
-
-    for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
-        if (lifetime == lifetime_values[i]) {
-            return i;
-        }
-    }
-    return 0;
+    g_queue_unlink(flow->table->expire_queue[flow->lifetime], &flow->list);
 }
 
-static void remove_flow_by_expiry(InetFlowTable * table, InetFlow * flow, guint64 lifetime)
+static void insert_flow_by_expiry(InetFlowPriv * flow)
 {
-    int index = find_expiry_index(lifetime);
-    g_queue_unlink(table->expire_queue[index], &flow->list);
+    g_queue_push_tail_link(flow->table->expire_queue[flow->lifetime], &flow->list);
 }
 
-static void insert_flow_by_expiry(InetFlowTable * table, InetFlow * flow, guint64 lifetime)
+static void flow_lifetime_set(InetFlowPriv * flow, int lifetime)
 {
-    int index = find_expiry_index(lifetime);
-    g_queue_push_tail_link(table->expire_queue[index], &flow->list);
+    remove_flow_by_expiry(flow);
+    flow->lifetime = lifetime;
+    insert_flow_by_expiry(flow);
 }
 
-void inet_flow_unref(InetFlow * flow)
+void inet_flow_free(InetFlow * flow)
 {
-    int index = find_expiry_index(flow->lifetime);
-    g_queue_unlink(flow->table->expire_queue[index], &flow->list);
-    g_hash_table_steal(flow->table->table, flow);
-    tcp_flow_free(flow->tcp);
-    g_free((gpointer) flow);
+    InetFlowPriv *priv = FLOW_PRIV(flow);
+    InetFlowTable *table = priv->table;
+
+    remove_flow_by_expiry(priv);
+    g_hash_table_steal(table->table, priv);
+    if (table->context_free && flow->context)
+        table->context_free(flow->context);
+    tcp_flow_free(priv->tcp);
+    g_free(priv);
 }
 
 /* TCP connection tracking */
@@ -1437,9 +1487,9 @@ static gboolean tcp_update(InetFlow * flow, InetPacket * pkt)
     if (inet_flow_protocol(flow) != IP_PROTOCOL_TCP || !pkt->l4 || !pkt->payload)
         return TRUE;
 
-    if (!flow->tcp)
-        flow->tcp = tcp_flow_new(NULL);
-    tcp_flow = flow->tcp;
+    if (!FLOW_PRIV(flow)->tcp)
+        FLOW_PRIV(flow)->tcp = tcp_flow_new(NULL);
+    tcp_flow = FLOW_PRIV(flow)->tcp;
     tcp = tcp_flow->state;
 
     if (tcp->state == INET_TCP_STATE_NONE) {
@@ -1488,7 +1538,7 @@ static gboolean tcp_update(InetFlow * flow, InetPacket * pkt)
 
 InetTcpConnState inet_flow_tcp_state(InetFlow * flow)
 {
-    return flow->tcp ? flow->tcp->state->state : INET_TCP_STATE_NONE;
+    return FLOW_PRIV(flow)->tcp ? FLOW_PRIV(flow)->tcp->state->state : INET_TCP_STATE_NONE;
 }
 
 void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
@@ -1496,91 +1546,87 @@ void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * cli
 {
     InetTcpFlow *tcp_flow;
 
-    if (!flow->tcp)
-        flow->tcp = tcp_flow_new(NULL);
-    tcp_flow = tcp_flow_new(flow->tcp->state);
+    if (!FLOW_PRIV(flow)->tcp)
+        FLOW_PRIV(flow)->tcp = tcp_flow_new(NULL);
+    tcp_flow = tcp_flow_new(FLOW_PRIV(flow)->tcp->state);
     tcp_flow->client_known = TRUE;
     tcp_flow->client_port = client_port;
     tcp_flow->client_addr = *client;
     /* State tracked on the linked flow before the link is incomplete */
-    tcp_flow_free(linked->tcp);
-    linked->tcp = tcp_flow;
+    tcp_flow_free(FLOW_PRIV(linked)->tcp);
+    FLOW_PRIV(linked)->tcp = tcp_flow;
 }
 
-static void inet_flow_update_tcp(InetFlow * flow, InetFlow * packet)
+/* Update the flow state and lifetime for a packet, and find the direction of
+ * the packet. The lifetime is changed while the flow is out of the expiry
+ * queues. */
+static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     /* FIN */
     if (CHECK_BIT(packet->flags, 0)) {
         /* ACK */
         if (CHECK_BIT(packet->flags, 4)) {
-            flow->state = FLOW_CLOSED;
-            flow->lifetime = INET_FLOW_DEFAULT_CLOSED_TIMEOUT;
+            flow->pub.state = FLOW_CLOSED;
+            flow->lifetime = LIFETIME_CLOSED;
         }
     }
     /* SYN */
     else if (CHECK_BIT(packet->flags, 1)) {
         /* ACK */
         if (CHECK_BIT(packet->flags, 4)) {
-            flow->state = FLOW_OPEN;
-            flow->lifetime = INET_FLOW_DEFAULT_OPEN_TIMEOUT;
+            flow->pub.state = FLOW_OPEN;
+            flow->lifetime = LIFETIME_OPEN;
         } else {
-            flow->state = FLOW_NEW;
-            flow->lifetime = INET_FLOW_DEFAULT_NEW_TIMEOUT;
-            flow->server_port = inet_tuple_get_dst_port(&packet->tuple);
+            flow->pub.state = FLOW_NEW;
+            flow->lifetime = LIFETIME_NEW;
+            flow->server_port = inet_tuple_get_dst_port(&packet->pub.tuple);
         }
     }
     /* RST */
     else if (CHECK_BIT(packet->flags, 2)) {
-        flow->state = FLOW_CLOSED;
-        flow->lifetime = INET_FLOW_DEFAULT_CLOSED_TIMEOUT;
+        flow->pub.state = FLOW_CLOSED;
+        flow->lifetime = LIFETIME_CLOSED;
     }
 
-    if (packet->direction == FLOW_DIRECTION_UNKNOWN) {
-        packet->direction = inet_tuple_get_dst_port(&packet->tuple) == flow->server_port ?
-            FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
-    }
+    packet->pub.direction = inet_tuple_get_dst_port(&packet->pub.tuple) == flow->server_port ?
+        FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
 }
 
-static void inet_flow_update_udp(InetFlow * flow, InetFlow * packet)
+static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    packet->direction =
-        inet_tuple_get_dst_port(&packet->tuple) <
-        inet_tuple_get_src_port(&packet->tuple) ? FLOW_DIRECTION_ORIGINAL :
+    packet->pub.direction =
+        inet_tuple_get_dst_port(&packet->pub.tuple) <
+        inet_tuple_get_src_port(&packet->pub.tuple) ? FLOW_DIRECTION_ORIGINAL :
         FLOW_DIRECTION_REPLY;
 
-    if (flow->direction && packet->direction && packet->direction != flow->direction) {
-        flow->state = FLOW_OPEN;
-        flow->lifetime = INET_FLOW_DEFAULT_OPEN_TIMEOUT;
+    if (flow->pub.direction && packet->pub.direction
+        && packet->pub.direction != flow->pub.direction) {
+        flow->pub.state = FLOW_OPEN;
+        flow->lifetime = LIFETIME_OPEN;
     }
 }
 
-static void inet_flow_update(InetFlow * flow, InetFlow * packet)
+static void inet_flow_update(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    if (inet_tuple_get_protocol(&flow->tuple) == IP_PROTOCOL_TCP) {
+    remove_flow_by_expiry(flow);
+    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_TCP) {
         inet_flow_update_tcp(flow, packet);
-    } else if (inet_tuple_get_protocol(&flow->tuple) == IP_PROTOCOL_UDP) {
+    } else if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_UDP) {
         inet_flow_update_udp(flow, packet);
     }
-    flow->direction = packet->direction;
+    insert_flow_by_expiry(flow);
+    flow->pub.direction = packet->pub.direction;
 }
 
-static void inet_flow_init(InetFlow * flow)
+InetFlow *inet_flow_expire(InetFlowTable * table, guint64 timestamp)
 {
-    memset(&flow->tuple, 0, sizeof(flow->tuple));
-    flow->state = FLOW_NEW;
-}
-
-InetFlow *inet_flow_expire(InetFlowTable * table, guint64 ts)
-{
-    GList *iter;
     int i;
 
-    for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
-        guint64 timeout = (lifetime_values[i] * TIMESTAMP_RESOLUTION_US);
+    for (i = 0; i < LIFETIME_COUNT; i++) {
         GList *first = g_queue_peek_head_link(table->expire_queue[i]);
         if (first) {
             InetFlow *flow = (InetFlow *) first->data;
-            if (flow->timestamp + timeout <= ts) {
+            if (flow->timestamp + table->timeout_us[i] <= timestamp) {
                 return flow;
             }
         }
@@ -1610,36 +1656,54 @@ gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags,
     return packet_parse(pkt, frame, length, fragments, 0, flags);
 }
 
-static void flow_count(InetFlow * flow, InetFlow * packet, guint length)
+static void flow_count(InetFlowPriv * flow, InetFlowPriv * packet, guint length)
 {
-    if (packet->direction == FLOW_DIRECTION_ORIGINAL)
-        flow->outbytes += length;
-    else if (packet->direction == FLOW_DIRECTION_REPLY)
-        flow->inbytes += length;
-    flow->packets++;
+    if (packet->pub.direction == FLOW_DIRECTION_ORIGINAL)
+        flow->pub.outbytes += length;
+    else if (packet->pub.direction == FLOW_DIRECTION_REPLY)
+        flow->pub.inbytes += length;
+    flow->pub.packets++;
+}
+
+static InetFlowPriv *flow_new(InetFlowTable * table, const InetTuple * tuple,
+                              guint64 timestamp)
+{
+    InetFlowPriv *flow;
+
+    /* Check if max table size is reached */
+    if (table->max > 0 && g_hash_table_size(table->table) >= table->max)
+        return NULL;
+
+    flow = g_malloc0(sizeof(InetFlowPriv));
+    flow->table = table;
+    flow->list.data = flow;
+    flow->lifetime = LIFETIME_NEW;
+    flow->pub.tuple = *tuple;
+    flow->pub.timestamp = timestamp ? : get_time_us();
+    g_hash_table_replace(table->table, flow, flow);
+    insert_flow_by_expiry(flow);
+    return flow;
 }
 
 InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length,
                         guint64 timestamp, guint32 flags, InetPacket * pkt)
 {
-    InetFlow packet = {.timestamp = timestamp };
+    InetFlowPriv packet = {.pub.timestamp = timestamp };
     InetPacket tmp_pkt;
-    InetFlow *flow;
+    InetFlowPriv *flow;
 
     if (!pkt)
         pkt = &tmp_pkt;
     if (!packet_parse(pkt, frame, length, table->frag_info_list, timestamp, flags))
         return NULL;
 
-    packet.tuple = pkt->tuple;
+    packet.pub.tuple = pkt->tuple;
     packet.flags = pkt->tcp.flags;
-    flow = (InetFlow *) g_hash_table_lookup(table->table, &packet);
+    flow = g_hash_table_lookup(table->table, &packet);
     if (flow) {
         if (flags & INET_FLOW_UPDATE) {
-            remove_flow_by_expiry(table, flow, flow->lifetime);
             inet_flow_update(flow, &packet);
-            insert_flow_by_expiry(table, flow, flow->lifetime);
-            flow->timestamp = timestamp ? : get_time_us();
+            flow->pub.timestamp = timestamp ? : get_time_us();
             flow_count(flow, &packet, length);
         }
         table->hits++;
@@ -1648,93 +1712,80 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
             pkt->status = INET_PACKET_NOT_FOUND;
             return NULL;
         }
-        /* Check if max table size is reached */
-        if (table->max > 0 && g_hash_table_size(table->table) >= table->max) {
+        flow = flow_new(table, &packet.pub.tuple, timestamp);
+        if (!flow) {
             pkt->status = INET_PACKET_TABLE_FULL;
             return NULL;
         }
-
-        flow = (InetFlow *) g_malloc0(sizeof(InetFlow));
-        flow->table = table;
-        flow->list.data = flow;
-        /* Set default lifetime before processing further - this may be over written */
-        flow->lifetime = INET_FLOW_DEFAULT_NEW_TIMEOUT;
-        flow->family = packet.tuple.family;
-        flow->tuple = packet.tuple;
-        g_hash_table_replace(table->table, (gpointer) flow, (gpointer) flow);
         table->misses++;
-        flow->timestamp = timestamp ? : get_time_us();
         inet_flow_update(flow, &packet);
-        insert_flow_by_expiry(table, flow, flow->lifetime);
         flow_count(flow, &packet, length);
     }
-    pkt->direction = packet.direction;
+    pkt->direction = packet.pub.direction;
     if (flags & INET_FLOW_TCP_TRACK)
-        tcp_update(flow, pkt);
-    return flow;
+        tcp_update(&flow->pub, pkt);
+    return &flow->pub;
 }
 
-InetFlow *inet_flow_create(InetFlowTable * table, InetTuple * tuple, uint64_t timestamp)
+InetFlow *inet_flow_create(InetFlowTable * table, const InetTuple * tuple, guint64 timestamp)
 {
-    InetFlow *flow;
+    InetFlowPriv *flow = flow_new(table, tuple, timestamp);
 
-    /* Check if max table size is reached */
-    if (table->max > 0 && g_hash_table_size(table->table) >= table->max) {
-        return NULL;
-    }
-
-    flow = (InetFlow *) g_malloc0(sizeof(InetFlow));
-    flow->table = table;
-    flow->list.data = flow;
-    /* Set default lifetime before processing further */
-    flow->lifetime = INET_FLOW_DEFAULT_NEW_TIMEOUT;
-    flow->family = tuple->family;
-    flow->hash = inet_tuple_hash(tuple);
-    flow->tuple = *tuple;
-    g_hash_table_replace(table->table, (gpointer) flow, (gpointer) flow);
-    flow->timestamp = timestamp ? : get_time_us();
-    insert_flow_by_expiry(table, flow, flow->lifetime);
-
-    return flow;
+    return flow ? &flow->pub : NULL;
 }
 
-void inet_flow_table_unref(InetFlowTable * table)
+void inet_flow_table_free(InetFlowTable * table)
 {
     int i;
 
     g_hash_table_remove_all(table->table);
     g_hash_table_destroy(table->table);
     inet_frag_list_free(table->frag_info_list);
-    for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
+    for (i = 0; i < LIFETIME_COUNT; i++) {
         g_queue_free(table->expire_queue[i]);
     }
-    g_free((gpointer) table);
+    g_free(table);
 }
 
-static void inet_flow_table_init(InetFlowTable * table)
+InetFlowTable *inet_flow_table_new(GDestroyNotify context_free)
 {
+    InetFlowTable *table = g_malloc0(sizeof(InetFlowTable));
     int i;
 
-    table->table =
-        g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare, NULL,
-                              (GDestroyNotify) inet_flow_unref);
-    table->frag_info_list = inet_frag_list_new();
-
-    for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
+    table->table = g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare,
+                                         NULL, (GDestroyNotify) inet_flow_free);
+    table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX,
+                                               INET_FRAG_DEFAULT_TIMEOUT);
+    table->context_free = context_free;
+    for (i = 0; i < LIFETIME_COUNT; i++) {
         table->expire_queue[i] = g_queue_new();
+        table->timeout_us[i] = (guint64) default_timeouts[i] * TIMESTAMP_RESOLUTION_US;
     }
-}
-
-InetFlowTable *inet_flow_table_new(void)
-{
-    InetFlowTable *table = (InetFlowTable *) g_malloc0(sizeof(InetFlowTable));
-    inet_flow_table_init(table);
     return table;
 }
 
-void inet_flow_table_max_set(InetFlowTable * table, guint64 value)
+guint inet_flow_table_size(InetFlowTable * table)
 {
-    table->max = value;
+    return g_hash_table_size(table->table);
+}
+
+void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows)
+{
+    table->max = max_flows;
+}
+
+void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s,
+                                  guint closed_s)
+{
+    table->timeout_us[LIFETIME_NEW] = (guint64) new_s * TIMESTAMP_RESOLUTION_US;
+    table->timeout_us[LIFETIME_OPEN] = (guint64) open_s * TIMESTAMP_RESOLUTION_US;
+    table->timeout_us[LIFETIME_CLOSED] = (guint64) closed_s * TIMESTAMP_RESOLUTION_US;
+}
+
+void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams,
+                                     guint timeout_s)
+{
+    frag_list_limits_set(table->frag_info_list, max_datagrams, timeout_s);
 }
 
 void inet_flow_foreach(InetFlowTable * table, IFFunc func, gpointer user_data)
@@ -1742,33 +1793,30 @@ void inet_flow_foreach(InetFlowTable * table, IFFunc func, gpointer user_data)
     int i;
 
     if (table) {
-        for (i = 0; i < INET_FLOW_LIFETIME_COUNT; i++) {
+        for (i = 0; i < LIFETIME_COUNT; i++) {
             g_queue_foreach(table->expire_queue[i], (GFunc) func, user_data);
         }
     }
 }
 
-InetFlow *inet_flow_lookup(InetFlowTable * table, InetTuple * tuple)
+InetFlow *inet_flow_lookup(InetFlowTable * table, const InetTuple * tuple)
 {
-    InetFlow packet;
+    InetFlowPriv packet = { 0 };
+    InetFlowPriv *flow;
 
-    packet.tuple = *tuple;
-    packet.hash = 0;
-    return (InetFlow *) g_hash_table_lookup(table->table, &packet);
+    packet.pub.tuple = *tuple;
+    flow = g_hash_table_lookup(table->table, &packet);
+    return flow ? &flow->pub : NULL;
 }
 
 void inet_flow_establish(InetFlowTable * table, InetFlow * flow)
 {
-    remove_flow_by_expiry(table, flow, flow->lifetime);
     flow->state = FLOW_OPEN;
-    flow->lifetime = INET_FLOW_DEFAULT_OPEN_TIMEOUT;
-    insert_flow_by_expiry(table, flow, flow->lifetime);
+    flow_lifetime_set(FLOW_PRIV(flow), LIFETIME_OPEN);
 }
 
 void inet_flow_close(InetFlowTable * table, InetFlow * flow)
 {
-    remove_flow_by_expiry(table, flow, flow->lifetime);
     flow->state = FLOW_CLOSED;
-    flow->lifetime = INET_FLOW_DEFAULT_CLOSED_TIMEOUT;
-    insert_flow_by_expiry(table, flow, flow->lifetime);
+    flow_lifetime_set(FLOW_PRIV(flow), LIFETIME_CLOSED);
 }

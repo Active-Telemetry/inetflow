@@ -212,9 +212,7 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     endwin();
     pcap_close(pcap);
 
-    g_printf("\nProcessed %d frames," " %" G_GUINT64_FORMAT " misses,"
-             " %" G_GUINT64_FORMAT " hits," " %" G_GUINT32_FORMAT " flows\n",
-             frames, table->misses, table->hits, inet_flow_table_size(table));
+    g_printf("\nProcessed %d frames, %u flows\n", frames, inet_flow_table_size(table));
 }
 
 static void process_pcap(const char *filename)
@@ -236,9 +234,7 @@ static void process_pcap(const char *filename)
     }
     pcap_close(pcap);
 
-    g_printf("\nProcessed %d frames," " %" G_GUINT64_FORMAT " misses,"
-             " %" G_GUINT64_FORMAT " hits," " %" G_GUINT32_FORMAT " flows\n",
-             frames, table->misses, table->hits, inet_flow_table_size(table));
+    g_printf("\nProcessed %d frames, %u flows\n", frames, inet_flow_table_size(table));
 }
 
 static void print_flow(InetFlow * flow, gpointer data)
@@ -257,7 +253,7 @@ static void print_flow(InetFlow * flow, gpointer data)
     inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_client_addr(&flow->tuple), uips,
               INET6_ADDRSTRLEN);
     g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5zu %-7zu %-7zu  %s %s\r\n",
-             flow->hash, uips, lips, inet_flow_protocol(flow),
+             inet_tuple_hash(&flow->tuple), uips, lips, inet_flow_protocol(flow),
              g_ntohs(inet_tuple_client_port(&flow->tuple)),
              g_ntohs(inet_tuple_server_port(&flow->tuple)),
              flow->packets, flow->inbytes, flow->outbytes,
@@ -280,7 +276,7 @@ static void clean_flow(InetFlow * flow, gpointer data)
         free(ndpi);
     }
 #endif
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 }
 
 static GOptionEntry entries[] = {
@@ -334,7 +330,7 @@ int main(int argc, char **argv)
 #endif
 
     signal(SIGINT, intHandler);
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     if (filename)
         process_pcap(filename);
     else
@@ -342,7 +338,7 @@ int main(int argc, char **argv)
     g_printf("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
     inet_flow_foreach(table, (IFFunc) print_flow, NULL);
     inet_flow_foreach(table, (IFFunc) clean_flow, NULL);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 #if defined(LIBNDPI_NEWEST_API)
     if (module)
         ndpi_exit_detection_module(module);

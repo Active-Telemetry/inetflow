@@ -1138,7 +1138,7 @@ void test_flow_properties()
 
     setup_test();
 
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1150,7 +1150,7 @@ void test_flow_properties()
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
 
     g_assert_cmpuint(flow->packets, ==, 2);
-    g_assert(flow->hash);
+    g_assert(FLOW_PRIV(flow)->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
 
@@ -1162,8 +1162,8 @@ void test_flow_properties()
     g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
     g_assert(inet_tuple_client_addr(&flow->tuple)->v4.s_addr == htonl(TEST_DADDR));
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_properties_reversed()
@@ -1173,7 +1173,7 @@ void test_flow_properties_reversed()
 
     setup_test();
 
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt_reverse(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1185,7 +1185,7 @@ void test_flow_properties_reversed()
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
 
     g_assert_cmpuint(flow->packets, ==, 2);
-    g_assert(flow->hash);
+    g_assert(FLOW_PRIV(flow)->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
 
@@ -1197,8 +1197,8 @@ void test_flow_properties_reversed()
     g_assert(inet_tuple_server_addr(&flow->tuple)->v4.s_addr == htonl(TEST_SADDR));
     g_assert(inet_tuple_client_addr(&flow->tuple)->v4.s_addr == htonl(TEST_DADDR));
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_properties_ipv6()
@@ -1208,7 +1208,7 @@ void test_flow_properties_ipv6()
 
     setup_test();
 
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1220,7 +1220,7 @@ void test_flow_properties_ipv6()
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
 
     g_assert_cmpuint(flow->packets, ==, 2);
-    g_assert(flow->hash);
+    g_assert(FLOW_PRIV(flow)->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
 
@@ -1232,8 +1232,8 @@ void test_flow_properties_ipv6()
     g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
     g_assert(memcmp(inet_tuple_client_addr(&flow->tuple), test_ip6dst, sizeof(test_ip6dst)) == 0);
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 
@@ -1244,7 +1244,7 @@ void test_flow_properties_ipv6_reversed()
 
     setup_test();
 
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt_reverse(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1256,7 +1256,7 @@ void test_flow_properties_ipv6_reversed()
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
 
     g_assert_cmpuint(flow->packets, ==, 2);
-    g_assert(flow->hash);
+    g_assert(FLOW_PRIV(flow)->hash);
     g_assert_cmpuint(inet_flow_protocol(flow), ==, IP_PROTOCOL_TCP);
 
 
@@ -1268,8 +1268,8 @@ void test_flow_properties_ipv6_reversed()
     g_assert(memcmp(inet_tuple_server_addr(&flow->tuple), test_ip6src, sizeof(test_ip6src)) == 0);
     g_assert(memcmp(inet_tuple_client_addr(&flow->tuple), test_ip6dst, sizeof(test_ip6dst)) == 0);
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_table_properties()
@@ -1278,7 +1278,7 @@ void test_flow_table_properties()
     InetFlow *flow1, *flow2;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     g_assert_nonnull((flow1 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1295,9 +1295,9 @@ void test_flow_table_properties()
     g_assert_cmpuint(table->hits, ==, 1);
     g_assert_cmpuint(table->misses, ==, 2);
 
-    inet_flow_unref(flow1);
-    inet_flow_unref(flow2);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_free(flow2);
+    inet_flow_table_free(table);
 }
 
 void flow_print_protocol(InetFlow * flow)
@@ -1316,7 +1316,7 @@ void test_flow_foreach()
     InetFlow *flow1, *flow2;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     g_assert_nonnull((flow1 =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1327,14 +1327,14 @@ void test_flow_foreach()
 
     inet_flow_foreach(table, (IFFunc) flow_print_protocol, NULL);
 
-    inet_flow_unref(flow1);
-    inet_flow_unref(flow2);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_free(flow2);
+    inet_flow_table_free(table);
 }
 
 void test_flow_create()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint64 now = get_time_us();
     setup_test();
     g_assert_nonnull(table);
@@ -1344,13 +1344,13 @@ void test_flow_create()
     g_assert_nonnull(flow);
     guint64 size;
     g_assert_cmpint(inet_flow_table_size(table), ==, 1);
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_create_many()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint64 now = get_time_us();
     setup_test();
     g_assert_nonnull(table);
@@ -1365,12 +1365,12 @@ void test_flow_create_many()
         g_assert_nonnull(flow);
     }
     g_assert_cmpint(inet_flow_table_size(table), ==, 10000);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_table_size()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     setup_test();
     g_assert_nonnull(table);
 
@@ -1390,8 +1390,8 @@ void test_flow_table_size()
         inet_flow_get(table, test_buffer, pk2, get_time_us(), FLOW_GET, NULL);
     g_assert_null(flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_not_expired()
@@ -1403,14 +1403,14 @@ void test_flow_not_expired()
     guint64 size;
 
     setup_test();
-    g_assert_nonnull(table = inet_flow_table_new());
+    g_assert_nonnull(table = inet_flow_table_new(NULL));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow =
         inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL);
     g_assert_null(inet_flow_expire(table, later));
     g_assert_cmpint(inet_flow_table_size(table), ==, 1);
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_expired()
@@ -1422,15 +1422,15 @@ void test_flow_expired()
     guint64 size;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow =
         inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL);
     g_assert_nonnull(inet_flow_expire(table, later));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
     g_assert_null(inet_flow_expire(table, later));
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_expired_no_unref()
@@ -1441,16 +1441,16 @@ void test_flow_expired_no_unref()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow =
         inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL);
     g_assert_nonnull(inet_flow_expire(table, later));
     g_assert_nonnull(inet_flow_expire(table, later));
     g_assert_nonnull(inet_flow_expire(table, later));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
     g_assert_null(inet_flow_expire(table, later));
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_expired_only_once()
@@ -1461,14 +1461,14 @@ void test_flow_expired_only_once()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow =
         inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL);
     while ((flow = inet_flow_expire(table, later))) {
-        inet_flow_unref(flow);
+        inet_flow_free(flow);
     }
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_new()
@@ -1477,14 +1477,14 @@ void test_flow_tcp_new()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_NEW);
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_update()
@@ -1494,7 +1494,7 @@ void test_flow_tcp_update()
     guint state = FLOW_CLOSED;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
@@ -1508,8 +1508,8 @@ void test_flow_tcp_update()
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, INET_FLOW_L2, NULL)));
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 guint8 *build_pkt_tcp(guint8 * buffer,
@@ -1529,7 +1529,7 @@ void test_flow_tcp_state_basic()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1565,12 +1565,12 @@ void test_flow_tcp_state_basic()
                       inet_flow_get(table, test_buffer, len, 3, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
     inet_flow_expire(table, flow->timestamp + (INET_FLOW_DEFAULT_CLOSED_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_syn_rst()
@@ -1579,7 +1579,7 @@ void test_flow_tcp_state_syn_rst()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1598,12 +1598,12 @@ void test_flow_tcp_state_syn_rst()
                       inet_flow_get(table, test_buffer, len, 1, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
     inet_flow_expire(table, flow->timestamp + (INET_FLOW_DEFAULT_CLOSED_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_syn_synack_rst()
@@ -1612,7 +1612,7 @@ void test_flow_tcp_state_syn_synack_rst()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1639,12 +1639,12 @@ void test_flow_tcp_state_syn_synack_rst()
                       inet_flow_get(table, test_buffer, len, 2, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
     inet_flow_expire(table, flow->timestamp + (INET_FLOW_DEFAULT_CLOSED_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_fin_rst()
@@ -1653,7 +1653,7 @@ void test_flow_tcp_state_fin_rst()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1688,12 +1688,12 @@ void test_flow_tcp_state_fin_rst()
                       inet_flow_get(table, test_buffer, len, 3, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
     inet_flow_expire(table, flow->timestamp + (INET_FLOW_DEFAULT_CLOSED_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_syn_timeout()
@@ -1703,7 +1703,7 @@ void test_flow_tcp_state_syn_timeout()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1716,12 +1716,12 @@ void test_flow_tcp_state_syn_timeout()
     g_assert_cmpuint(flow->state, ==, FLOW_NEW);
     g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
     inet_flow_expire(table, now + (INET_FLOW_DEFAULT_NEW_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_syn_synack_timeout()
@@ -1731,7 +1731,7 @@ void test_flow_tcp_state_syn_synack_timeout()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1752,12 +1752,12 @@ void test_flow_tcp_state_syn_synack_timeout()
                       inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
     inet_flow_expire(table, now + (INET_FLOW_DEFAULT_OPEN_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_tcp_state_fin_timeout()
@@ -1767,7 +1767,7 @@ void test_flow_tcp_state_fin_timeout()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Incoming TCP SYN Packet */
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
@@ -1795,12 +1795,12 @@ void test_flow_tcp_state_fin_timeout()
     g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
 
     inet_flow_expire(table, now + (INET_FLOW_DEFAULT_OPEN_TIMEOUT * 1000000));
-    inet_flow_unref(flow);
+    inet_flow_free(flow);
 
     /* Always expect flow to expire when it is closed */
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
 
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_ipv4_encap()
@@ -1809,7 +1809,7 @@ void test_flow_ipv4_encap()
     InetFlow *flow;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     guint8 *p = build_hdr_ip(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE);
     p = build_hdr_after_ip(p, IP_PROTOCOL_TCP, FALSE);
@@ -1817,8 +1817,8 @@ void test_flow_ipv4_encap()
 
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET_IP, NULL)));
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_ipv6_encap()
@@ -1827,7 +1827,7 @@ void test_flow_ipv6_encap()
     InetFlowTable *table;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     guint8 *p = build_hdr_ip(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_TCP, FALSE);
     p = build_hdr_after_ip(p, IP_PROTOCOL_TCP, FALSE);
@@ -1836,8 +1836,8 @@ void test_flow_ipv6_encap()
     g_assert_nonnull((flow =
                       inet_flow_get(table, test_buffer, len, 0, FLOW_GET_IP, NULL)));
 
-    inet_flow_unref(flow);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow);
+    inet_flow_table_free(table);
 }
 
 void test_flow_bad_ip_version()
@@ -1858,7 +1858,7 @@ void test_flow_parse_ipv4_fragment()
     InetFlowTable *table;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     g_assert(g_list_length(table->frag_info_list->head) == 0);
 
     /* First IP fragment */
@@ -1887,8 +1887,8 @@ void test_flow_parse_ipv4_fragment()
     g_assert(flow1 == flow3);
     g_assert(g_list_length(table->frag_info_list->head) == 0);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_table_free_fragments()
@@ -1897,14 +1897,14 @@ void test_flow_table_free_fragments()
     guint8 *p;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Free the table while it still holds the first fragment of a datagram */
     p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
     g_assert_nonnull(inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0, FLOW_GET, NULL));
     g_assert(g_list_length(table->frag_info_list->head) == 1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_fragment_direction(gconstpointer data)
@@ -1916,7 +1916,7 @@ void test_flow_fragment_direction(gconstpointer data)
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* First fragment from the client */
     p = build_hdr_eth(test_buffer, eth_protocol);
@@ -1939,7 +1939,7 @@ void test_flow_fragment_direction(gconstpointer data)
     g_assert_nonnull((last = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     g_assert(first == last);
     g_assert(g_list_length(table->frag_info_list->head) == 1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_parse_ipv6_fragment()
@@ -1949,7 +1949,7 @@ void test_flow_parse_ipv6_fragment()
     InetFlowTable *table;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     g_assert(g_list_length(table->frag_info_list->head) == 0);
 
     /* First IP fragment */
@@ -1979,8 +1979,8 @@ void test_flow_parse_ipv6_fragment()
     g_assert(flow1 == flow3);
     g_assert(g_list_length(table->frag_info_list->head) == 0);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_clear_expired_frag_info()
@@ -1991,7 +1991,7 @@ void test_clear_expired_frag_info()
     guint64 now = get_time_us();
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
     g_assert(g_list_length(table->frag_info_list->head) == 0);
 
     /* IP fragment 1 - expired */
@@ -2024,8 +2024,8 @@ void test_clear_expired_frag_info()
 
     /* Do proper clean up */
     clear_expired_frag_info(table->frag_info_list, now + 1000000);
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_expiry_queue()
@@ -2038,7 +2038,7 @@ void test_flow_expiry_queue()
     guint64 size;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     guint8 *p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE,
                               TEST_SPORT, TEST_DPORT, SYN);
@@ -2055,10 +2055,10 @@ void test_flow_expiry_queue()
         inet_flow_get(table, test_buffer, len2, later, FLOW_GET, NULL);
 
     g_assert_nonnull(inet_flow_expire(table, timeout));
-    inet_flow_unref(flow1);
+    inet_flow_free(flow1);
     g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
-    inet_flow_unref(flow2);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow2);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_udp()
@@ -2068,7 +2068,7 @@ void test_flow_match_udp()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow1 =
@@ -2082,8 +2082,8 @@ void test_flow_match_udp()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_same_ports(gconstpointer data)
@@ -2094,7 +2094,7 @@ void test_flow_match_same_ports(gconstpointer data)
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     /* Both ends use the same port, as for IKE on port 500 */
     TEST_DPORT = TEST_SPORT;
@@ -2108,7 +2108,7 @@ void test_flow_match_same_ports(gconstpointer data)
 
     g_assert(flow1 == flow2);
     g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 static void set_tuple(InetTuple * tuple, int family, guint16 sport, guint16 dport)
@@ -2140,7 +2140,7 @@ void test_flow_match_udp6()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP);
     flow1 =
@@ -2154,8 +2154,8 @@ void test_flow_match_udp6()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_tcp()
@@ -2165,7 +2165,7 @@ void test_flow_match_tcp()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     flow1 =
@@ -2179,8 +2179,8 @@ void test_flow_match_tcp()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_tcp6()
@@ -2190,7 +2190,7 @@ void test_flow_match_tcp6()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_TCP);
     flow1 =
@@ -2204,8 +2204,8 @@ void test_flow_match_tcp6()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_icmp()
@@ -2215,7 +2215,7 @@ void test_flow_match_icmp()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_ICMP);
     flow1 =
@@ -2229,8 +2229,8 @@ void test_flow_match_icmp()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_match_icmp6()
@@ -2240,7 +2240,7 @@ void test_flow_match_icmp6()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_ICMP);
     flow1 =
@@ -2254,8 +2254,8 @@ void test_flow_match_icmp6()
 
     g_assert(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_table_free(table);
 }
 
 void test_flow_nomatch_port()
@@ -2265,7 +2265,7 @@ void test_flow_nomatch_port()
     guint len;
 
     setup_test();
-    g_assert_nonnull((table = inet_flow_table_new()));
+    g_assert_nonnull((table = inet_flow_table_new(NULL)));
 
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     flow1 =
@@ -2282,9 +2282,9 @@ void test_flow_nomatch_port()
 
     g_assert_false(flow1 == flow2);
 
-    inet_flow_unref(flow1);
-    inet_flow_unref(flow2);
-    inet_flow_table_unref(table);
+    inet_flow_free(flow1);
+    inet_flow_free(flow2);
+    inet_flow_table_free(table);
 }
 
 void test_tuple_exact()
@@ -2397,7 +2397,7 @@ void test_flow_parse_ip_in_ipv6()
 
 void test_packet_l3()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     guint len;
 
@@ -2412,12 +2412,12 @@ void test_packet_l3()
                                    &pkt));
     g_assert(pkt.l3 == test_buffer + sizeof(ethernet_hdr_t) + sizeof(ip6_hdr_t) +
              sizeof(gre_hdr_t));
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_packet_tuple()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
     guint len;
@@ -2431,12 +2431,12 @@ void test_packet_tuple()
     /* A frame that does not parse */
     g_assert_null(inet_flow_get(table, test_buffer, 10, 0, FLOW_GET, &pkt));
     g_assert_cmpint(pkt.status, ==, INET_PACKET_PARSE_ERROR);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_get_full_parse_fail()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint len;
 
     setup_test();
@@ -2449,7 +2449,7 @@ void test_flow_get_full_parse_fail()
     p = build_hdr_udp(p, FALSE);
     g_assert_null(inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0, FLOW_GET_IP, NULL));
     g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_packet_parse()
@@ -2479,7 +2479,7 @@ void test_packet_parse()
 
 void test_flow_create_lookup()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetTuple tuple = { 0 };
     InetTuple other;
     InetFlow *flow;
@@ -2506,12 +2506,12 @@ void test_flow_create_lookup()
     other.sport = htons(1);
     g_assert_null(inet_flow_create(table, &other, 0));
     g_assert_null(inet_flow_lookup(table, &other));
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_establish_close()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint64 ts = 1000;
     InetTuple tuple = { 0 };
     InetFlow *flow;
@@ -2537,13 +2537,13 @@ void test_flow_establish_close()
                                    TIMESTAMP_RESOLUTION_US));
     g_assert(inet_flow_expire(table, ts + INET_FLOW_DEFAULT_CLOSED_TIMEOUT *
                               TIMESTAMP_RESOLUTION_US) == flow);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_fragment_limit(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint64 now = get_time_us();
     guint8 *p;
     guint len;
@@ -2569,7 +2569,7 @@ void test_flow_fragment_limit(gconstpointer data)
     /* Expired datagrams make room for new ones */
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, now + (FRAG_EXPIRY_TIME + 1) * TIMESTAMP_RESOLUTION_US, FLOW_GET, NULL));
     g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tuple_equal_mismatch()
@@ -2591,7 +2591,7 @@ void test_tuple_equal_mismatch()
 
 void test_flow_fragment_mismatch()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint8 *p;
     guint len;
 
@@ -2613,7 +2613,7 @@ void test_flow_fragment_mismatch()
     ip->daddr ^= 1;
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
     g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 3);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_parse_malformed_gre()
@@ -2771,7 +2771,7 @@ void test_tuple_exact_ports()
 void test_packet_tcp(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
     guint len;
@@ -2800,7 +2800,7 @@ void test_packet_tcp(gconstpointer data)
     g_assert_cmpuint(pkt.tcp.window, ==, 1024);
     g_assert_cmpuint(pkt.payload_length, ==, 5);
     g_assert(memcmp(pkt.payload, "hello", 5) == 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_packet_padding(gconstpointer data)
@@ -2865,7 +2865,7 @@ void test_packet_ipv6_ext()
 void test_packet_fragment(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     guint8 *p;
     guint len;
@@ -2886,12 +2886,12 @@ void test_packet_fragment(gconstpointer data)
     g_assert_null(pkt.l4);
     g_assert_null(pkt.payload);
     g_assert_true(pkt.fragment);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_get_not_found()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
     guint len;
@@ -2910,12 +2910,12 @@ void test_flow_get_not_found()
     g_assert_cmpint(pkt.status, ==, INET_PACKET_OK);
     g_assert_cmpuint(pkt.direction, ==, FLOW_DIRECTION_UNKNOWN);
     g_assert_cmpuint(flow->packets, ==, 1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_flow_get_table_full()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     guint len;
 
@@ -2926,18 +2926,18 @@ void test_flow_get_table_full()
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
     g_assert_null(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
     g_assert_cmpint(pkt.status, ==, INET_PACKET_TABLE_FULL);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 /* Look up a frame in a new table and return the anomalies reported for it */
 static guint32 frame_anomalies(guint len, gboolean expect_flow)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt);
 
     g_assert(expect_flow == (flow != NULL));
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
     return pkt.anomalies;
 }
 
@@ -3103,7 +3103,7 @@ void test_anomaly_udp_fragment()
  * and the packet information for it */
 static guint32 tcp_options_info(const guint8 * opts, guint opts_len, InetPacket * pkt)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint8 *ip = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
     guint8 *tcp = build_hdr_ip(ip, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE);
     guint8 *p = build_tcp_segment(tcp, FALSE, SYN, 1, 0, 1, NULL);
@@ -3114,7 +3114,7 @@ static guint32 tcp_options_info(const guint8 * opts, guint opts_len, InetPacket 
     ((ip_hdr_t *) ip)->tot_len = g_htons(p - ip);
     g_assert_nonnull(inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0,
                                    FLOW_GET | INET_FLOW_VALIDATE, pkt));
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
     return pkt->anomalies;
 }
 
@@ -3169,7 +3169,7 @@ void test_tcp_options_invalid()
 
 void test_ipv4_options_invalid()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     guint8 *p;
     guint len;
@@ -3193,7 +3193,7 @@ void test_ipv4_options_invalid()
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET | INET_FLOW_VALIDATE, &pkt));
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==,
                     INET_ANOMALY_IPV4_OPT_INVALID);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_options_not_validated()
@@ -3207,11 +3207,11 @@ void test_options_not_validated()
     setup_test();
     tcp_options_info(opts, sizeof(opts), &pkt);
     len = (guint) (pkt.payload - test_buffer);
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
     g_assert_cmphex(pkt.anomalies, ==, 0);
     g_assert_cmphex(pkt.tcp.options, ==, 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 /* Send one fragment of datagram 0xbeef holding extra bytes after the UDP
@@ -3229,7 +3229,7 @@ static InetFlow *send_fragment(InetFlowTable * table, guint16 eth_protocol, guin
 void test_fragment_overlap(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
 
     setup_test();
@@ -3245,13 +3245,13 @@ void test_fragment_overlap(gconstpointer data)
     g_assert_nonnull(send_fragment(table, eth_protocol, 3, FALSE, 0, 0, 0xbeef, &pkt));
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
     g_assert(g_list_length(table->frag_info_list->head) == 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_fragment_too_large(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
 
     setup_test();
@@ -3262,13 +3262,13 @@ void test_fragment_too_large(gconstpointer data)
                     INET_ANOMALY_FRAG_TOO_LARGE);
     send_fragment(table, eth_protocol, 0x1000, FALSE, 0, 0, 0xbeef, &pkt);
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_TOO_LARGE, ==, 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_fragment_out_of_order(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *first, *last;
     InetPacket pkt;
 
@@ -3283,12 +3283,12 @@ void test_fragment_out_of_order(gconstpointer data)
     g_assert(first == last);
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_OVERLAP, ==, 0);
     g_assert(g_list_length(table->frag_info_list->head) == 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_fragment_last_first()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
 
     setup_test();
@@ -3297,13 +3297,13 @@ void test_fragment_last_first()
     g_assert(g_list_length(table->frag_info_list->head) == 1);
     g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, 0, 0xbeef, &pkt));
     g_assert(g_list_length(table->frag_info_list->head) == 0);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 
 void test_fragment_expired()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     guint64 now = get_time_us();
 
@@ -3312,12 +3312,12 @@ void test_fragment_expired()
     send_fragment(table, ETH_PROTOCOL_IP, 1, TRUE, 0,
                   now + (FRAG_EXPIRY_TIME + 1) * TIMESTAMP_RESOLUTION_US, 0xbeef, &pkt);
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_FRAG_EXPIRED, ==, INET_ANOMALY_FRAG_EXPIRED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_fragment_many_ranges()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFragment *entry;
     InetPacket pkt;
     int i;
@@ -3330,7 +3330,7 @@ void test_fragment_many_ranges()
     g_assert_cmpuint(g_list_length(table->frag_info_list->head), ==, 1);
     entry = table->frag_info_list->head->data;
     g_assert_cmpuint(entry->nranges, ==, INET_FRAG_MAX_RANGES);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_fragment_no_list(gconstpointer data)
@@ -3429,7 +3429,7 @@ static void tcp_test_setup(gconstpointer data)
 
 void test_tcp_track_client_close(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
 
@@ -3446,12 +3446,12 @@ void test_tcp_track_client_close(gconstpointer data)
     g_assert_cmpint(pkt.tcp.state, ==, INET_TCP_STATE_FIN_WAIT2);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_TIME_WAIT);
     tcp_send_ok(table, &flow, TRUE, ACK, 112, 507, 1000, 0, INET_TCP_STATE_TIME_WAIT);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_server_close(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3459,12 +3459,12 @@ void test_tcp_track_server_close(gconstpointer data)
     tcp_send_ok(table, &flow, FALSE, FIN_ACK, 501, 101, 1000, 0, INET_TCP_STATE_CLOSE_WAIT);
     tcp_send_ok(table, &flow, TRUE, FIN_ACK, 101, 502, 1000, 0, INET_TCP_STATE_LAST_ACK);
     tcp_send_ok(table, &flow, FALSE, ACK, 502, 102, 1000, 0, INET_TCP_STATE_CLOSED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_simultaneous_close(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3473,12 +3473,12 @@ void test_tcp_track_simultaneous_close(gconstpointer data)
     /* The server FIN does not acknowledge the client FIN */
     tcp_send_ok(table, &flow, FALSE, FIN_ACK, 501, 101, 1000, 0, INET_TCP_STATE_CLOSING);
     tcp_send_ok(table, &flow, FALSE, ACK, 502, 102, 1000, 0, INET_TCP_STATE_TIME_WAIT);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_untracked(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3486,12 +3486,12 @@ void test_tcp_track_untracked(gconstpointer data)
     tcp_send_ok(table, &flow, TRUE, ACK, 7000, 9000, 1000, 10, INET_TCP_STATE_UNTRACKED);
     tcp_send_ok(table, &flow, FALSE, ACK, 1, 2, 0, 10, INET_TCP_STATE_UNTRACKED);
     tcp_send_ok(table, &flow, TRUE, SYN, 1, 0, 0, 0, INET_TCP_STATE_UNTRACKED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_one_sided(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3501,22 +3501,22 @@ void test_tcp_track_one_sided(gconstpointer data)
     tcp_send_events(table, &flow, FALSE, ACK, 501, 101, 1000, 10,
                     INET_TCP_EVENT_ONE_SIDED, TRUE);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_ONE_SIDED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 
     /* Only the client side of the handshake is seen */
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_EVENT_ONE_SIDED,
                     TRUE);
     tcp_send_events(table, &flow, TRUE, ACK, 101, 501, 1000, 10, INET_TCP_EVENT_ONE_SIDED,
                     TRUE);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_ONE_SIDED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_handshake_errors(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3554,12 +3554,12 @@ void test_tcp_track_handshake_errors(gconstpointer data)
                     TRUE);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_SYN_RECV);
     tcp_send_ok(table, &flow, TRUE, ACK, 101, 501, 1000, 0, INET_TCP_STATE_ESTABLISHED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_handshake_rst(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3569,19 +3569,19 @@ void test_tcp_track_handshake_rst(gconstpointer data)
                     TRUE);
     /* A port that is not open */
     tcp_send_ok(table, &flow, FALSE, RST | ACK, 0, 101, 0, 0, INET_TCP_STATE_CLOSED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
     tcp_send_events(table, &flow, FALSE, RST, 900, 0, 0, 0, INET_TCP_EVENT_INVALID_RST, TRUE);
     tcp_send_ok(table, &flow, FALSE, RST, 501, 0, 0, 0, INET_TCP_STATE_CLOSED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_established(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3626,12 +3626,12 @@ void test_tcp_track_established(gconstpointer data)
     tcp_send_ok(table, &flow, FALSE, RST, 501, 0, 0, 0, INET_TCP_STATE_CLOSED);
     /* Nothing is checked after the connection closes */
     tcp_send_ok(table, &flow, TRUE, ACK, 9999, 9999, 0, 10, INET_TCP_STATE_CLOSED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_data_after_fin(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
@@ -3643,12 +3643,12 @@ void test_tcp_track_data_after_fin(gconstpointer data)
     tcp_send_events(table, &flow, TRUE, ACK, 107, 501, 1000, 5, INET_TCP_EVENT_WRONG_SEQ,
                     TRUE);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_FIN_WAIT1);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_window_scale(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     const guint8 client_opts[] = { OPT_NOP, TCP_OPT_WSCALE, 3, 2 };
     const guint8 server_opts[] = { OPT_NOP, TCP_OPT_WSCALE, 3, 3 };
     InetFlow *flow;
@@ -3668,10 +3668,10 @@ void test_tcp_track_window_scale(gconstpointer data)
                 INET_TCP_STATE_ESTABLISHED);
     tcp_send_events(table, &flow, TRUE, ACK, 101 + 900, 501, 1000, 10,
                     INET_TCP_EVENT_OUT_OF_WINDOW, TRUE);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 
     /* Without a window scale option from both peers the window is not scaled */
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     tcp_opts = client_opts;
     tcp_opts_len = sizeof(client_opts);
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
@@ -3682,12 +3682,12 @@ void test_tcp_track_window_scale(gconstpointer data)
     tcp_send_ok(table, &flow, FALSE, ACK, 501, 101, 100, 0, INET_TCP_STATE_ESTABLISHED);
     tcp_send_events(table, &flow, TRUE, ACK, 101 + 700, 501, 1000, 10,
                     INET_TCP_EVENT_OUT_OF_WINDOW, TRUE);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_timestamps(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     guint8 ts_opts[] = { OPT_NOP, OPT_NOP, TCP_OPT_TIMESTAMP, 10, 0, 0, 0, 10, 0, 0, 0, 0 };
     InetFlow *flow;
 
@@ -3713,12 +3713,12 @@ void test_tcp_track_timestamps(gconstpointer data)
     tcp_opts_len = 0;
     tcp_send_events(table, &flow, TRUE, ACK, 111, 501, 1000, 10,
                     INET_TCP_EVENT_INVALID_TIMESTAMP, TRUE);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_same_ports()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     /* With the same port at both ends the address identifies the client */
@@ -3729,12 +3729,12 @@ void test_tcp_track_same_ports()
                     TRUE);
     tcp_send_ok(table, &flow, FALSE, ACK, 501, 101, 1000, 10, INET_TCP_STATE_ESTABLISHED);
     TEST_DPORT = _TEST_DPORT;
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_not_tcp()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
     guint len;
@@ -3745,7 +3745,7 @@ void test_tcp_track_not_tcp()
                                            FLOW_GET | INET_FLOW_TCP_TRACK, &pkt)));
     g_assert_false(pkt.tcp.invalid);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_NONE);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 /* Send an IPv4 TCP segment between the given ends and track it */
@@ -3789,7 +3789,7 @@ static InetFlow *tcp_link_public(InetFlowTable * table, InetFlow * private)
 
 void test_tcp_link()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *private, *public, *flow;
     InetPacket pkt;
 
@@ -3821,14 +3821,14 @@ void test_tcp_link()
     g_assert_cmphex(pkt.tcp.events, ==, INET_TCP_EVENT_INVALID_ACK);
 
     /* Each flow holds a reference to the shared state */
-    inet_flow_unref(private);
+    inet_flow_free(private);
     g_assert_cmpint(inet_flow_tcp_state(public), ==, INET_TCP_STATE_ESTABLISHED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_link_replaces_state()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *private, *public, *flow;
     InetPacket pkt;
 
@@ -3844,12 +3844,12 @@ void test_tcp_link_replaces_state()
     g_assert_true(tcp_send_addr(table, &flow, TEST_DADDR, TEST_DPORT, NAT_ADDR, NAT_PORT,
                                 SYN_ACK, 500, 101, 0, &pkt));
     g_assert_cmpint(inet_flow_tcp_state(private), ==, INET_TCP_STATE_SYN_RECV);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_link_before_syn()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *private, *public, *flow;
     InetPacket pkt;
     guint32 client = g_htonl(TEST_SADDR), server = g_htonl(TEST_DADDR);
@@ -3870,40 +3870,40 @@ void test_tcp_link_before_syn()
                                 SYN_ACK, 500, 101, 0, &pkt));
     g_assert(flow == public);
     g_assert_cmpint(inet_flow_tcp_state(private), ==, INET_TCP_STATE_SYN_RECV);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_handshake_paths(gconstpointer data)
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetFlow *flow;
 
     tcp_test_setup(data);
     /* Simultaneous open: a SYN from each end */
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_ok(table, &flow, FALSE, SYN, 500, 0, 1000, 0, INET_TCP_STATE_SYN_RECV);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 
     /* The client starts again with a new initial sequence number */
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_ok(table, &flow, TRUE, SYN, 300, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_events(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0,
                     INET_TCP_EVENT_SYNACK_WRONG_ACK, TRUE);
     tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 301, 1000, 0, INET_TCP_STATE_SYN_RECV);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 
     /* The client aborts before the handshake completes */
-    table = inet_flow_table_new();
+    table = inet_flow_table_new(NULL);
     tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
     tcp_send_ok(table, &flow, FALSE, SYN_ACK, 500, 101, 1000, 0, INET_TCP_STATE_SYN_RECV);
     tcp_send_ok(table, &flow, TRUE, RST, 101, 0, 0, 0, INET_TCP_STATE_CLOSED);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
 }
 
 void test_tcp_track_malformed()
 {
-    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *table = inet_flow_table_new(NULL);
     InetPacket pkt;
     InetFlow *flow;
     guint len;
@@ -3916,7 +3916,109 @@ void test_tcp_track_malformed()
                                            FLOW_GET | INET_FLOW_TCP_TRACK, &pkt)));
     g_assert_false(pkt.tcp.invalid);
     g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_NONE);
-    inet_flow_table_unref(table);
+    inet_flow_table_free(table);
+}
+
+static int contexts_freed;
+
+static void context_free(gpointer context)
+{
+    g_assert_cmpstr(context, ==, "context");
+    contexts_freed++;
+}
+
+void test_table_context_free()
+{
+    InetFlowTable *table = inet_flow_table_new(context_free);
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    contexts_freed = 0;
+
+    /* Freeing a flow frees its context */
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
+    flow->context = "context";
+    inet_flow_free(flow);
+    g_assert_cmpint(contexts_freed, ==, 1);
+
+    /* Freeing the table frees the contexts of its flows */
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
+    flow->context = "context";
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
+    inet_flow_table_free(table);
+    g_assert_cmpint(contexts_freed, ==, 2);
+}
+
+void test_table_timeouts()
+{
+    InetFlowTable *table = inet_flow_table_new(NULL);
+    guint64 ts = 1000;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    inet_flow_table_timeouts_set(table, 5, 50, 1);
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, ts, FLOW_GET, NULL)));
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
+
+    /* A new flow uses the new timeout */
+    g_assert_null(inet_flow_expire(table, ts + 4 * TIMESTAMP_RESOLUTION_US));
+    g_assert(inet_flow_expire(table, ts + 5 * TIMESTAMP_RESOLUTION_US) == flow);
+
+    /* An established flow uses the open timeout */
+    inet_flow_establish(table, flow);
+    g_assert_null(inet_flow_expire(table, ts + 49 * TIMESTAMP_RESOLUTION_US));
+    g_assert(inet_flow_expire(table, ts + 50 * TIMESTAMP_RESOLUTION_US) == flow);
+
+    /* A closed flow uses the closed timeout */
+    inet_flow_close(table, flow);
+    g_assert(inet_flow_expire(table, ts + 1 * TIMESTAMP_RESOLUTION_US) == flow);
+    inet_flow_table_free(table);
+}
+
+void test_table_frag_limits()
+{
+    InetFlowTable *table = inet_flow_table_new(NULL);
+    guint64 now = get_time_us();
+    InetPacket pkt;
+    int i;
+
+    setup_test();
+    inet_flow_table_frag_limits_set(table, 2, 5);
+    for (i = 0; i < 2; i++)
+        g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, now, i, &pkt));
+    g_assert_null(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0, now, i, &pkt));
+    g_assert_cmpint(pkt.status, ==, INET_PACKET_FRAG_UNTRACKED);
+
+    /* Datagrams expire after the configured timeout */
+    g_assert_nonnull(send_fragment(table, ETH_PROTOCOL_IP, 0, TRUE, 0,
+                                   now + 6 * TIMESTAMP_RESOLUTION_US, i, &pkt));
+    inet_flow_table_free(table);
+}
+
+void test_frag_list_standalone()
+{
+    InetFragList *fragments = inet_frag_list_new(1, 30);
+    InetPacket pkt;
+    guint8 *p;
+
+    setup_test();
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 1);
+    g_assert_true(inet_packet_parse(test_buffer, (guint) (p - test_buffer), INET_FLOW_L2,
+                                    fragments, &pkt));
+
+    /* The list holds one datagram */
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ip_fragment(p, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 2);
+    g_assert_false(inet_packet_parse(test_buffer, (guint) (p - test_buffer), INET_FLOW_L2,
+                                     fragments, &pkt));
+    g_assert_cmpint(pkt.status, ==, INET_PACKET_FRAG_UNTRACKED);
+    inet_frag_list_free(fragments);
 }
 
 int main(int argc, char *argv[])
@@ -4156,6 +4258,11 @@ int main(int argc, char *argv[])
     g_test_add_data_func("/tcp/track/handshake_paths/ipv6",
                          GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_handshake_paths);
     g_test_add_func("/tcp/track/malformed", test_tcp_track_malformed);
+
+    g_test_add_func("/table/context_free", test_table_context_free);
+    g_test_add_func("/table/timeouts", test_table_timeouts);
+    g_test_add_func("/table/frag_limits", test_table_frag_limits);
+    g_test_add_func("/frag_list/standalone", test_frag_list_standalone);
 
     rc = g_test_run();
     return rc;
