@@ -513,7 +513,12 @@ static gboolean flow_parse_ipv4(InetTuple * f, const guint8 * data, guint32 leng
                                 guint64 ts, guint16 * tcp_flags, gboolean tunnel)
 {
     ip_hdr_t *iph = (ip_hdr_t *) data;
+    guint32 hdr_len;
+
     if (length < sizeof(ip_hdr_t))
+        return FALSE;
+    hdr_len = (iph->ihl_version & 0x0f) * FOUR_BYTE_UNITS;
+    if (hdr_len < sizeof(ip_hdr_t) || length < hdr_len)
         return FALSE;
     if (iphr) {
         *iphr = data;
@@ -530,22 +535,21 @@ static gboolean flow_parse_ipv4(InetTuple * f, const guint8 * data, guint32 leng
     DEBUG("Protocol: %d\n", iph->protocol);
     inet_tuple_set_protocol(f, iph->protocol);
 
-    f->offset += sizeof(ip_hdr_t);
+    f->offset += hdr_len;
     /* Don't bother with this for non-first fragments */
     if ((GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0) {
         switch (iph->protocol) {
         case IP_PROTOCOL_TCP:
-            if (!flow_parse_tcp
-                (f, data + sizeof(ip_hdr_t), length - sizeof(ip_hdr_t), tcp_flags))
+            if (!flow_parse_tcp(f, data + hdr_len, length - hdr_len, tcp_flags))
                 return FALSE;
             break;
         case IP_PROTOCOL_UDP:
-            if (!flow_parse_udp(f, data + sizeof(ip_hdr_t), length - sizeof(ip_hdr_t)))
+            if (!flow_parse_udp(f, data + hdr_len, length - hdr_len))
                 return FALSE;
             break;
         case IP_PROTOCOL_GRE:
             if (tunnel) {
-                if (!flow_parse_gre(f, data + sizeof(ip_hdr_t), length - sizeof(ip_hdr_t),
+                if (!flow_parse_gre(f, data + hdr_len, length - hdr_len,
                                     fragments, iphr, ts, tcp_flags))
                     return FALSE;
             }

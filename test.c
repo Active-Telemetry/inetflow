@@ -139,6 +139,18 @@ static guint8 *build_hdr_ipv4(guint8 * buffer, guint next_ip_protocol, gboolean 
     return p;
 }
 
+static guint8 *build_hdr_ipv4_options(guint8 * buffer, guint next_ip_protocol,
+                                      guint options_len)
+{
+    ip_hdr_t *ip = (ip_hdr_t *) buffer;
+    guint8 *p = build_hdr_ipv4(buffer, next_ip_protocol, FALSE);
+
+    ip->ihl_version = 0x40 | ((sizeof(ip_hdr_t) + options_len) / FOUR_BYTE_UNITS);
+    /* Pad the options with No Operation options */
+    memset(p, 0x01, options_len);
+    return p + options_len;
+}
+
 static guint8 *build_hdr_ipv6(guint8 * buffer, guint next_ip_protocol, gboolean reverse)
 {
     guint8 *p = buffer;
@@ -887,6 +899,44 @@ void test_flow_parse_malformed_ipv4_hdr_length()
     /* Partial IPv4 length */
     g_assert_false(flow_parse
                    (test_tuple, test_buffer, len - 8, NULL, NULL, 0, NULL, FALSE));
+}
+
+void test_flow_parse_ipv4_options()
+{
+    setup_test();
+
+    guint8 *p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ipv4_options(p, IP_PROTOCOL_TCP, 8);
+    p = build_hdr_tcp(p, FALSE);
+    guint len = (guint) (p - test_buffer);
+
+    g_assert(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, FALSE));
+    g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->src)->sin_port, ==,
+                     htons(TEST_SPORT));
+    g_assert_cmpuint(((struct sockaddr_in *)&test_tuple->dst)->sin_port, ==,
+                     htons(TEST_DPORT));
+    g_assert_cmpuint(test_tuple->offset, ==, sizeof(ethernet_hdr_t) + sizeof(ip_hdr_t) + 8);
+}
+
+void test_flow_parse_malformed_ipv4_hlen()
+{
+    setup_test();
+
+    guint8 *p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IP);
+    ip_hdr_t *ip = (ip_hdr_t *) p;
+    p = build_hdr_ipv4_options(p, IP_PROTOCOL_TCP, 8);
+    p = build_hdr_tcp(p, FALSE);
+    guint len = (guint) (p - test_buffer);
+
+    /* Header length shorter than the fixed IPv4 header */
+    ip->ihl_version = 0x44;
+    g_assert_false(flow_parse(test_tuple, test_buffer, len, NULL, NULL, 0, NULL, FALSE));
+
+    /* Header length longer than the packet */
+    ip->ihl_version = 0x4f;
+    g_assert_false(flow_parse
+                   (test_tuple, test_buffer, sizeof(ethernet_hdr_t) + sizeof(ip_hdr_t) + 8,
+                    NULL, NULL, 0, NULL, FALSE));
 }
 
 void test_flow_parse_malformed_ipv6_hdr_length()
@@ -2231,6 +2281,8 @@ int main(int argc, char *argv[])
                     test_flow_parse_malformed_vlan_hdr_length);
     g_test_add_func("/flow/parse/malformed/ipv4",
                     test_flow_parse_malformed_ipv4_hdr_length);
+    g_test_add_func("/flow/parse/ipv4/options", test_flow_parse_ipv4_options);
+    g_test_add_func("/flow/parse/malformed/ipv4/hlen", test_flow_parse_malformed_ipv4_hlen);
     g_test_add_func("/flow/parse/malformed/ipv6",
                     test_flow_parse_malformed_ipv6_hdr_length);
     g_test_add_func("/flow/parse/malformed/pppoe",
