@@ -5,7 +5,7 @@ libinetflow_la_CFLAGS = \
 	@GLIB_CFLAGS@
 
 libinetflow_la_LDFLAGS = \
-	-version-info 1:0:0
+	-version-info 2:0:0
 
 libinetflow_la_LIBADD = \
 	@GLIB_LIBS@
@@ -43,5 +43,5 @@ test: unittest
 	$(Q)genhtml -q coverage.info --output-directory gcov
 
 indent:
-	indent -kr -ncs -nut -l92 *.c *.h
-	rm *.c~ *.h~
+	indent -kr -ncs -nut -l140 inetflow.c inetflow.h test.c demo.c inetmon.c
+	rm -f *.c~ *.h~

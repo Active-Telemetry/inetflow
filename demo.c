@@ -42,6 +42,15 @@ static gboolean running = true;
 
 #define MAXIMUM_SNAPLEN 262144
 
+static void print_flow(InetFlow * flow, gpointer data);
+
+static inline uint64_t get_time_us(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (tv.tv_sec * (uint64_t) 1000000 + tv.tv_usec);
+}
+
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
 static struct ndpi_detection_module_struct *module = NULL;
 static u_int32_t flow_size = 0;
@@ -54,18 +63,7 @@ typedef struct {
     bool done;
 } ndpi_context;
 
-static void print_flow(InetFlow * flow, gpointer data);
-
-static inline uint64_t
-get_time_us (void)
-{
-    struct timeval tv;
-    gettimeofday (&tv, NULL);
-    return (tv.tv_sec * (uint64_t) 1000000 + tv.tv_usec);
-}
-
-static void ndpi_debug_function(u_int32_t protocol, void *module_struct,
-                                ndpi_log_level_t log_level, const char *format, ...)
+static void ndpi_debug_function(u_int32_t protocol, void *module_struct, ndpi_log_level_t log_level, const char *format, ...)
 {
     va_list args;
     va_start(args, format);
@@ -78,8 +76,7 @@ static bool ndpi_flow_giveup(InetFlow * flow)
     u_int32_t flow_protocol = inet_flow_protocol(flow);
     uint64_t packets = flow->packets;
     return ((flow_protocol != IPPROTO_UDP && flow_protocol != IPPROTO_TCP) ||
-            (flow_protocol == IPPROTO_UDP && packets > 8) ||
-            (flow_protocol == IPPROTO_TCP && packets > 10));
+            (flow_protocol == IPPROTO_UDP && packets > 8) || (flow_protocol == IPPROTO_TCP && packets > 10));
 }
 
 static void analyse_frame(InetFlow * flow, const uint8_t * iph, uint32_t length)
@@ -103,9 +100,7 @@ static void analyse_frame(InetFlow * flow, const uint8_t * iph, uint32_t length)
         return;
     }
 
-    protocol =
-        ndpi_detection_process_packet(module, ndpi->flow, iph, length, time,
-                                      ndpi->src, ndpi->dst);
+    protocol = ndpi_detection_process_packet(module, ndpi->flow, iph, length, time, ndpi->src, ndpi->dst);
 
 #if defined(LIBNDPI_NEWEST_API)
     ndpi->protocol = protocol.app_protocol;
@@ -127,8 +122,7 @@ static void analyse_frame(InetFlow * flow, const uint8_t * iph, uint32_t length)
     }
 
     if (verbose)
-        g_print("Protocol: %s(%d)\n",
-                ndpi_get_proto_name(module, ndpi->protocol), ndpi->protocol);
+        g_print("Protocol: %s(%d)\n", ndpi_get_proto_name(module, ndpi->protocol), ndpi->protocol);
 }
 #endif
 
@@ -136,8 +130,7 @@ static void process_frame(const uint8_t * frame, uint32_t length)
 {
     InetPacket pkt;
     InetFlow *flow = inet_flow_get(table, frame, length, 0,
-                                   INET_FLOW_CREATE | INET_FLOW_UPDATE | INET_FLOW_L2 |
-                                   INET_FLOW_TUNNEL, &pkt);
+                                   INET_FLOW_CREATE | INET_FLOW_UPDATE | INET_FLOW_L2 | INET_FLOW_TUNNEL, &pkt);
     const uint8_t *iph = pkt.l3;
     if (flow && iph) {
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
@@ -149,15 +142,15 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     return;
 }
 
-static gint compare_flow (InetFlow *a, InetFlow *b)
+static gint compare_flow(InetFlow * a, InetFlow * b)
 {
     return (b->inbytes + b->outbytes) - (a->inbytes + a->outbytes);
 }
 
 static void collect_flow(InetFlow * flow, gpointer data)
 {
-    GList **list = (GList **)data;
-    *list = g_list_insert_sorted(*list, (gpointer)flow, (GCompareFunc) compare_flow);
+    GList **list = (GList **) data;
+    *list = g_list_insert_sorted(*list, (gpointer) flow, (GCompareFunc) compare_flow);
 }
 
 static void dump_stats(void)
@@ -171,16 +164,16 @@ static void dump_stats(void)
     refresh();
     inet_flow_foreach(table, (IFFunc) collect_flow, &flows);
     count = 0;
-    g_printf("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
-    for (GList *iter = flows; iter && (count < (row-2)); iter = g_list_next(iter))
-    {
-        InetFlow *flow = (InetFlow *)iter->data;
+    g_printf
+        ("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
+    for (GList * iter = flows; iter && (count < (row - 2)); iter = g_list_next(iter)) {
+        InetFlow *flow = (InetFlow *) iter->data;
         if ((flow->inbytes + flow->outbytes) < 1000)
             continue;
         print_flow(flow, NULL);
         count++;
     }
-    g_list_free (flows);
+    g_list_free(flows);
 }
 
 static void process_interface(const char *interface, int snaplen, int promisc, int to_ms)
@@ -202,10 +195,9 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     initscr();
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
         process_frame(frame, hdr.caplen);
-        if (interval && ((get_time_us() - lasttime) / 1000000) > interval)
-        {
+        if (interval && ((get_time_us() - lasttime) / 1000000) > interval) {
             lasttime = get_time_us();
-            inet_flow_expire (table, lasttime);
+            inet_flow_expire(table, lasttime);
             dump_stats();
         }
     }
@@ -248,17 +240,14 @@ static void print_flow(InetFlow * flow, gpointer data)
         proto = "";
 #endif
 
-    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_server_addr(&flow->tuple), lips,
-              INET6_ADDRSTRLEN);
-    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_client_addr(&flow->tuple), uips,
-              INET6_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_server_addr(&flow->tuple), lips, INET6_ADDRSTRLEN);
+    inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_client_addr(&flow->tuple), uips, INET6_ADDRSTRLEN);
     g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5zu %-7zu %-7zu  %s %s\r\n",
              inet_tuple_hash(&flow->tuple), uips, lips, inet_flow_protocol(flow),
              g_ntohs(inet_tuple_client_port(&flow->tuple)),
              g_ntohs(inet_tuple_server_port(&flow->tuple)),
              flow->packets, flow->inbytes, flow->outbytes,
-             flow->state == FLOW_NEW ? "NEW   " : (flow->state ==
-                                                   FLOW_OPEN ? "OPEN  " : "CLOSED"),
+             flow->state == FLOW_NEW ? "NEW   " : (flow->state == FLOW_OPEN ? "OPEN  " : "CLOSED"),
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
              dpi ? proto :
 #endif
@@ -280,14 +269,14 @@ static void clean_flow(InetFlow * flow, gpointer data)
 }
 
 static GOptionEntry entries[] = {
-    { "pcap", 'p', 0, G_OPTION_ARG_STRING, &filename, "Pcap file to use", NULL },
-    { "interface", 'i', 0, G_OPTION_ARG_STRING, &iface, "Interface to capture on", NULL },
+    {"pcap", 'p', 0, G_OPTION_ARG_STRING, &filename, "Pcap file to use", NULL},
+    {"interface", 'i', 0, G_OPTION_ARG_STRING, &iface, "Interface to capture on", NULL},
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
-    { "dpi", 'd', 0, G_OPTION_ARG_NONE, &dpi, "Analyse frames using DPI", NULL },
+    {"dpi", 'd', 0, G_OPTION_ARG_NONE, &dpi, "Analyse frames using DPI", NULL},
 #endif
-    { "timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL },
-    { "verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL },
-    { NULL }
+    {"timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL},
+    {"verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL},
+    {NULL}
 };
 
 static void intHandler(int dummy)
@@ -335,7 +324,8 @@ int main(int argc, char **argv)
         process_pcap(filename);
     else
         process_interface(iface, MAXIMUM_SNAPLEN, 1, 1000);
-    g_printf("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
+    g_printf
+        ("Hash    lip                                           uip                                         prot lport uport  pkts  inbytes outbytes state  app\r\n");
     inet_flow_foreach(table, (IFFunc) print_flow, NULL);
     inet_flow_foreach(table, (IFFunc) clean_flow, NULL);
     inet_flow_table_free(table);

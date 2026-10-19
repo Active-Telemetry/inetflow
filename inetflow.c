@@ -116,12 +116,12 @@ typedef struct ethernet_hdr_t {
     guint8 destination[6];
     guint8 source[6];
     guint16 protocol;
-} __attribute__((packed)) ethernet_hdr_t;
+} __attribute__ ((packed)) ethernet_hdr_t;
 
 typedef struct vlan_hdr_t {
     guint16 tci;
     guint16 protocol;
-} __attribute__((packed)) vlan_hdr_t;
+} __attribute__ ((packed)) vlan_hdr_t;
 
 typedef struct pppoe_sess_hdr {
     guint8 ver_type;
@@ -129,7 +129,7 @@ typedef struct pppoe_sess_hdr {
     guint16 session_id;
     guint16 payload_length;
     guint16 ppp_protocol_id;
-} __attribute__((packed)) pppoe_sess_hdr_t;
+} __attribute__ ((packed)) pppoe_sess_hdr_t;
 
 #define GRE_HEADER_CSUM         0x8000
 #define GRE_HEADER_ROUTING      0x4000
@@ -139,7 +139,7 @@ typedef struct pppoe_sess_hdr {
 typedef struct gre_hdr_t {
     guint16 flags_version;
     guint16 protocol;
-} __attribute__((packed)) gre_hdr_t;
+} __attribute__ ((packed)) gre_hdr_t;
 
 #define IP_PROTOCOL_HBH_OPT     0
 #define IP_PROTOCOL_ICMP        1
@@ -180,7 +180,7 @@ typedef struct ip_hdr_t {
     guint16 check;
     guint32 saddr;
     guint32 daddr;
-} __attribute__((packed)) ip_hdr_t;
+} __attribute__ ((packed)) ip_hdr_t;
 
 typedef struct ip6_hdr_t {
     guint32 ver_tc_fl;
@@ -189,7 +189,7 @@ typedef struct ip6_hdr_t {
     guint8 hop_limit;
     guint8 saddr[16];
     guint8 daddr[16];
-} __attribute__((packed)) ip6_hdr_t;
+} __attribute__ ((packed)) ip6_hdr_t;
 
 typedef struct tcp_hdr_t {
     guint16 source;
@@ -200,21 +200,21 @@ typedef struct tcp_hdr_t {
     guint16 window;
     guint16 check;
     guint16 urg_ptr;
-} __attribute__((packed)) tcp_hdr_t;
+} __attribute__ ((packed)) tcp_hdr_t;
 
 typedef struct udp_hdr_t {
     guint16 source;
     guint16 destination;
     guint16 length;
     guint16 check;
-} __attribute__((packed)) udp_hdr_t;
+} __attribute__ ((packed)) udp_hdr_t;
 
 typedef struct frag_hdr_t {
     guint8 next_hdr;
     guint8 res;
     guint16 fo_res_mflag;
     guint32 id;
-} __attribute__((packed)) frag_hdr_t;
+} __attribute__ ((packed)) frag_hdr_t;
 
 typedef struct auth_hdr_t {
     guint8 next_hdr;
@@ -222,24 +222,22 @@ typedef struct auth_hdr_t {
     guint16 reserved;
     guint64 spi_seq;
     guint64 icv;
-} __attribute__((packed)) auth_hdr_t;
+} __attribute__ ((packed)) auth_hdr_t;
 
 typedef struct sctp_hdr_t {
     guint16 source;
     guint16 destination;
     guint32 ver_tag;
     guint32 checksum;
-} __attribute__((packed)) sctp_hdr_t;
+} __attribute__ ((packed)) sctp_hdr_t;
 
 typedef struct ipv6_partial_ext_hdr_t {
     guint8 next_hdr;
     guint8 hdr_ext_len;
-} __attribute__((packed)) ipv6_partial_ext_hdr_t;
+} __attribute__ ((packed)) ipv6_partial_ext_hdr_t;
 
-static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length,
-                                InetFragList * fragments, guint64 ts, guint32 flags);
-static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length,
-                                InetFragList * fragments, guint64 ts, guint32 flags);
+static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags);
+static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags);
 
 struct _InetTcpFlow;
 static void tcp_flow_free(struct _InetTcpFlow *tcp_flow);
@@ -259,8 +257,7 @@ static int addr_compare(const InetTuple * tuple, const InetAddr * a, const InetA
     return memcmp(a, b, tuple->family == AF_INET ? sizeof(a->v4) : sizeof(a->v6));
 }
 
-void inet_tuple_set(InetTuple * tuple, guint8 family, guint8 protocol, const void *src,
-                    guint16 sport, const void *dst, guint16 dport)
+void inet_tuple_set(InetTuple * tuple, guint8 family, guint8 protocol, const void *src, guint16 sport, const void *dst, guint16 dport)
 {
     size_t len = family == AF_INET ? sizeof(struct in_addr) : sizeof(struct in6_addr);
 
@@ -278,8 +275,7 @@ static gboolean tuple_src_is_server(const InetTuple * tuple)
     guint16 sport = GUINT16_FROM_BE(tuple->sport);
     guint16 dport = GUINT16_FROM_BE(tuple->dport);
 
-    return sport < dport ||
-        (sport == dport && addr_compare(tuple, &tuple->src, &tuple->dst) < 0);
+    return sport < dport || (sport == dport && addr_compare(tuple, &tuple->src, &tuple->dst) < 0);
 }
 
 const InetAddr *inet_tuple_server_addr(const InetTuple * tuple)
@@ -302,8 +298,7 @@ guint16 inet_tuple_client_port(const InetTuple * tuple)
     return tuple_src_is_server(tuple) ? tuple->dport : tuple->sport;
 }
 
-void inet_tuple_to_sockaddr(const InetTuple * tuple, gboolean src,
-                            struct sockaddr_storage *out)
+void inet_tuple_to_sockaddr(const InetTuple * tuple, gboolean src, struct sockaddr_storage *out)
 {
     const InetAddr *addr = src ? &tuple->src : &tuple->dst;
     guint16 port = src ? tuple->sport : tuple->dport;
@@ -338,8 +333,7 @@ gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b)
     if (a->protocol != b->protocol || a->family != b->family) {
         return FALSE;
     }
-    return addr_compare(a, &a->src, &b->src) == 0 && a->sport == b->sport &&
-        addr_compare(a, &a->dst, &b->dst) == 0 && a->dport == b->dport;
+    return addr_compare(a, &a->src, &b->src) == 0 && a->sport == b->sport && addr_compare(a, &a->dst, &b->dst) == 0 && a->dport == b->dport;
 }
 
 guint inet_tuple_hash(InetTuple * tuple)
@@ -374,12 +368,10 @@ static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
     return 1;
 }
 
-static gboolean frag_is_expired(InetFragList * list, InetFragment * frag_info,
-                                guint64 timestamp)
+static gboolean frag_is_expired(InetFragList * list, InetFragment * frag_info, guint64 timestamp)
 {
     /* Caller supplied timestamps can go backwards, which is not expiry */
-    if (timestamp > frag_info->timestamp &&
-        timestamp - frag_info->timestamp > list->timeout_us)
+    if (timestamp > frag_info->timestamp && timestamp - frag_info->timestamp > list->timeout_us)
         return TRUE;
     return FALSE;
 }
@@ -457,8 +449,7 @@ static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guin
 /* Match a fragment to its datagram. The entry gives the fragment offset and
  * length, and returns the ports and the anomalies. Returns FALSE when the
  * datagram can not be tracked. */
-static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
-                                 gboolean more_fragments)
+static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry, gboolean more_fragments)
 {
     guint32 start = entry->offset;
     guint32 end = entry->offset + entry->length;
@@ -503,8 +494,7 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
     }
 
     /* Stop tracking the datagram once all of its data has been seen */
-    if (found->total && found->nranges == 1 && found->ranges[0].start == 0
-        && found->ranges[0].end >= found->total) {
+    if (found->total && found->nranges == 1 && found->ranges[0].start == 0 && found->ranges[0].end >= found->total) {
         fragments->head = g_list_delete_link(fragments->head, match);
         free(found);
     }
@@ -521,11 +511,10 @@ void inet_frag_list_free(InetFragList * fragments)
     free(fragments);
 }
 
-static void frag_list_limits_set(InetFragList * fragments, guint max_datagrams,
-                                 guint timeout_s)
+static void frag_list_limits_set(InetFragList * fragments, guint max_datagrams, guint timeout_s)
 {
     fragments->max = max_datagrams;
-    fragments->timeout_us = (guint64) timeout_s * TIMESTAMP_RESOLUTION_US;
+    fragments->timeout_us = (guint64) timeout_s *TIMESTAMP_RESOLUTION_US;
 }
 
 InetFragList *inet_frag_list_new(guint max_datagrams, guint timeout_s)
@@ -561,8 +550,7 @@ static inline void set_anomaly(InetPacket * pkt, guint32 anomaly)
     pkt->anomalies |= anomaly;
 }
 
-static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length,
-                        guint32 hdr_len)
+static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length, guint32 hdr_len)
 {
     if (hdr_len <= length) {
         pkt->payload = data + hdr_len;
@@ -572,9 +560,8 @@ static void set_payload(InetPacket * pkt, const guint8 * data, guint32 length,
 
 /* Walk a list of IP or TCP options and return FALSE if one has an invalid
  * length. Call func for each option that has a length byte. */
-typedef void (*OptFunc)(guint8 kind, const guint8 * opt, guint8 len, InetPacket * pkt);
-static gboolean parse_options(const guint8 * opts, guint32 length, OptFunc func,
-                              InetPacket * pkt)
+typedef void (*OptFunc) (guint8 kind, const guint8 * opt, guint8 len, InetPacket * pkt);
+static gboolean parse_options(const guint8 * opts, guint32 length, OptFunc func, InetPacket * pkt)
 {
     guint32 i = 0;
 
@@ -654,8 +641,7 @@ static void tcp_option(guint8 kind, const guint8 * opt, guint8 len, InetPacket *
     }
 }
 
-static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 length,
-                               guint32 flags)
+static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 length, guint32 flags)
 {
     tcp_hdr_t *tcp = (tcp_hdr_t *) data;
     guint16 offset_flags;
@@ -681,8 +667,7 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
     else {
         set_payload(pkt, data, length, hdr_len);
         if ((flags & (INET_FLOW_VALIDATE | INET_FLOW_TCP_TRACK))
-            && !parse_options(data + sizeof(tcp_hdr_t), hdr_len - sizeof(tcp_hdr_t),
-                              tcp_option, pkt))
+            && !parse_options(data + sizeof(tcp_hdr_t), hdr_len - sizeof(tcp_hdr_t), tcp_option, pkt))
             set_anomaly(pkt, INET_ANOMALY_TCP_OPT_INVALID);
     }
     return TRUE;
@@ -696,8 +681,7 @@ static gboolean flow_parse_udp(InetPacket * pkt, const guint8 * data, guint32 le
         return FALSE;
     }
     /* The UDP length covers the whole datagram, which a fragment does not hold */
-    if (GUINT16_FROM_BE(udp->length) < sizeof(udp_hdr_t) ||
-        (!pkt->fragment && GUINT16_FROM_BE(udp->length) > length))
+    if (GUINT16_FROM_BE(udp->length) < sizeof(udp_hdr_t) || (!pkt->fragment && GUINT16_FROM_BE(udp->length) > length))
         set_anomaly(pkt, INET_ANOMALY_UDP_LEN_INVALID);
 
     pkt->tuple.sport = udp->source;
@@ -730,8 +714,7 @@ static void set_headers(InetPacket * pkt, const guint8 * l3, const guint8 * l4)
     pkt->tcp.options = 0;
 }
 
-static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 length,
-                               InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
 {
     gre_hdr_t *gre = (gre_hdr_t *) data;
     if (length < sizeof(gre_hdr_t))
@@ -752,13 +735,11 @@ static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 le
     DEBUG("Protocol: %d\n", proto);
     switch (proto) {
     case ETH_PROTOCOL_IP:
-        if (!flow_parse_ipv4
-            (pkt, data + offset, length - offset, fragments, ts, flags))
+        if (!flow_parse_ipv4(pkt, data + offset, length - offset, fragments, ts, flags))
             return FALSE;
         break;
     case ETH_PROTOCOL_IPV6:
-        if (!flow_parse_ipv6
-            (pkt, data + offset, length - offset, fragments, ts, flags))
+        if (!flow_parse_ipv6(pkt, data + offset, length - offset, fragments, ts, flags))
             return FALSE;
         break;
     default:
@@ -767,8 +748,7 @@ static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 le
     return TRUE;
 }
 
-static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length,
-                                InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
 {
     InetTuple *f = &pkt->tuple;
     ip_hdr_t *iph = (ip_hdr_t *) data;
@@ -799,8 +779,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     else
         /* Ignore link layer padding after the end of the IP packet */
         length = tot_len;
-    set_headers(pkt, data,
-                (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0 ? data + hdr_len : NULL);
+    set_headers(pkt, data, (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0 ? data + hdr_len : NULL);
     pkt->fragment = (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) != 0;
 
     f->family = AF_INET;
@@ -826,8 +805,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
             break;
         case IP_PROTOCOL_GRE:
             if (flags & INET_FLOW_TUNNEL) {
-                if (!flow_parse_gre(pkt, data + hdr_len, length - hdr_len, fragments, ts,
-                                    flags))
+                if (!flow_parse_gre(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags))
                     return FALSE;
             }
             break;
@@ -855,7 +833,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
         if (!fragments)
             return TRUE;
 
-        gboolean more_fragments = !!(GUINT16_FROM_BE(iph->frag_off) & 0x2000);
+        gboolean more_fragments = ! !(GUINT16_FROM_BE(iph->frag_off) & 0x2000);
 
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
@@ -868,8 +846,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     return TRUE;
 }
 
-static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length,
-                                InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
 {
     InetTuple *f = &pkt->tuple;
     ip6_hdr_t *iph = (ip6_hdr_t *) data;
@@ -1012,7 +989,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
         if (!fragments)
             return TRUE;
 
-        gboolean more_fragments = !!(GUINT16_FROM_BE(fragment_hdr->fo_res_mflag) & 0x1);
+        gboolean more_fragments = ! !(GUINT16_FROM_BE(fragment_hdr->fo_res_mflag) & 0x1);
 
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
@@ -1025,8 +1002,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     return TRUE;
 }
 
-static gboolean flow_parse_ip(InetPacket * pkt, const guint8 * data, guint32 length,
-                              InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse_ip(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
 {
     guint8 version;
 
@@ -1050,8 +1026,7 @@ static gboolean flow_parse_ip(InetPacket * pkt, const guint8 * data, guint32 len
     return TRUE;
 }
 
-static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length,
-                           InetFragList * fragments, guint64 ts, guint32 flags)
+static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length, InetFragList * fragments, guint64 ts, guint32 flags)
 {
     InetTuple *f = pkt ? &pkt->tuple : NULL;
     ethernet_hdr_t *e;
@@ -1235,7 +1210,7 @@ static void tcp_flow_free(InetTcpFlow * tcp_flow)
 
 static guint32 tcp_seg_len(InetPacket * pkt)
 {
-    return pkt->payload_length + !!(pkt->tcp.flags & TCP_SYN) + !!(pkt->tcp.flags & TCP_FIN);
+    return pkt->payload_length + ! !(pkt->tcp.flags & TCP_SYN) + ! !(pkt->tcp.flags & TCP_FIN);
 }
 
 static void tcp_peer_syn(InetTcpPeer * peer, InetPacket * pkt)
@@ -1243,9 +1218,9 @@ static void tcp_peer_syn(InetTcpPeer * peer, InetPacket * pkt)
     peer->isn = pkt->tcp.seq;
     peer->next_seq = pkt->tcp.seq + 1;
     peer->window = pkt->tcp.window;
-    peer->wscale_offered = !!(pkt->tcp.options & INET_TCP_OPT_WSCALE);
+    peer->wscale_offered = ! !(pkt->tcp.options & INET_TCP_OPT_WSCALE);
     peer->wscale = MIN(pkt->tcp.wscale, TCP_MAX_WSCALE);
-    peer->ts_offered = !!(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP);
+    peer->ts_offered = ! !(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP);
     peer->last_ts = pkt->tcp.ts_val;
 }
 
@@ -1272,13 +1247,10 @@ static void tcp_peer_update(InetTcpState * tcp, InetTcpPeer * peer, InetPacket *
 /* A RST is valid when its sequence number is inside the receive window */
 static gboolean tcp_rst_valid(InetTcpPeer * receiver, InetPacket * pkt)
 {
-    return SEQ_GEQ(pkt->tcp.seq, receiver->last_ack) &&
-        SEQ_LEQ(pkt->tcp.seq, receiver->last_ack + MAX(receiver->window, 1));
+    return SEQ_GEQ(pkt->tcp.seq, receiver->last_ack) && SEQ_LEQ(pkt->tcp.seq, receiver->last_ack + MAX(receiver->window, 1));
 }
 
-static guint32 tcp_handshake(InetTcpState * tcp, InetTcpPeer * sender,
-                             InetTcpPeer * receiver, gboolean from_client,
-                             InetPacket * pkt)
+static guint32 tcp_handshake(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * receiver, gboolean from_client, InetPacket * pkt)
 {
     guint16 flags = pkt->tcp.flags;
 
@@ -1288,8 +1260,7 @@ static guint32 tcp_handshake(InetTcpState * tcp, InetTcpPeer * sender,
          * carry the next sequence number. */
         if (tcp->state == INET_TCP_STATE_SYN_SENT ?
             (flags & TCP_ACK) && pkt->tcp.ack == receiver->next_seq :
-            from_client ? tcp_rst_valid(receiver, pkt) :
-            pkt->tcp.seq == sender->next_seq) {
+            from_client ? tcp_rst_valid(receiver, pkt) : pkt->tcp.seq == sender->next_seq) {
             tcp->state = INET_TCP_STATE_CLOSED;
             return 0;
         }
@@ -1359,12 +1330,10 @@ static guint32 tcp_handshake(InetTcpState * tcp, InetTcpPeer * sender,
     return 0;
 }
 
-static void tcp_close(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * receiver,
-                      gboolean from_client, InetPacket * pkt)
+static void tcp_close(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * receiver, gboolean from_client, InetPacket * pkt)
 {
-    gboolean fin = !!(pkt->tcp.flags & TCP_FIN);
-    gboolean acks_fin = (pkt->tcp.flags & TCP_ACK) && receiver->fin_sent &&
-        SEQ_GT(pkt->tcp.ack, receiver->fin_seq);
+    gboolean fin = ! !(pkt->tcp.flags & TCP_FIN);
+    gboolean acks_fin = (pkt->tcp.flags & TCP_ACK) && receiver->fin_sent && SEQ_GT(pkt->tcp.ack, receiver->fin_seq);
 
     switch (tcp->state) {
     case INET_TCP_STATE_ESTABLISHED:
@@ -1399,9 +1368,7 @@ static void tcp_close(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * re
 }
 
 /* Check a packet on a connection that has completed the handshake */
-static guint32 tcp_established(InetTcpState * tcp, InetTcpPeer * sender,
-                               InetTcpPeer * receiver, gboolean from_client,
-                               InetPacket * pkt)
+static guint32 tcp_established(InetTcpState * tcp, InetTcpPeer * sender, InetTcpPeer * receiver, gboolean from_client, InetPacket * pkt)
 {
     guint16 flags = pkt->tcp.flags;
     guint32 seq = pkt->tcp.seq;
@@ -1420,8 +1387,7 @@ static guint32 tcp_established(InetTcpState * tcp, InetTcpPeer * sender,
         }
         if (!from_client)
             return INET_TCP_EVENT_SYN_WRONG_DIR;
-        return seq == sender->isn ? INET_TCP_EVENT_SYN_RESEND :
-            INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ;
+        return seq == sender->isn ? INET_TCP_EVENT_SYN_RESEND : INET_TCP_EVENT_SYN_RESEND_DIFF_SEQ;
     }
 
     if (flags & TCP_RST) {
@@ -1432,8 +1398,7 @@ static guint32 tcp_established(InetTcpState * tcp, InetTcpPeer * sender,
     }
 
     /* PAWS (RFC 7323). A RST is checked above without a timestamp. */
-    if (tcp->ts_ok && (!(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP) ||
-                       SEQ_LT(pkt->tcp.ts_val, sender->last_ts)))
+    if (tcp->ts_ok && (!(pkt->tcp.options & INET_TCP_OPT_TIMESTAMP) || SEQ_LT(pkt->tcp.ts_val, sender->last_ts)))
         events |= INET_TCP_EVENT_INVALID_TIMESTAMP;
 
     if ((flags & TCP_ACK) && SEQ_GT(pkt->tcp.ack, receiver->next_seq))
@@ -1541,8 +1506,7 @@ InetTcpConnState inet_flow_tcp_state(InetFlow * flow)
     return FLOW_PRIV(flow)->tcp ? FLOW_PRIV(flow)->tcp->state->state : INET_TCP_STATE_NONE;
 }
 
-void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client,
-                        guint16 client_port)
+void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client, guint16 client_port)
 {
     InetTcpFlow *tcp_flow;
 
@@ -1596,11 +1560,9 @@ static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     packet->pub.direction =
         inet_tuple_get_dst_port(&packet->pub.tuple) <
-        inet_tuple_get_src_port(&packet->pub.tuple) ? FLOW_DIRECTION_ORIGINAL :
-        FLOW_DIRECTION_REPLY;
+        inet_tuple_get_src_port(&packet->pub.tuple) ? FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
 
-    if (flow->pub.direction && packet->pub.direction
-        && packet->pub.direction != flow->pub.direction) {
+    if (flow->pub.direction && packet->pub.direction && packet->pub.direction != flow->pub.direction) {
         flow->pub.state = FLOW_OPEN;
         flow->lifetime = LIFETIME_OPEN;
     }
@@ -1650,8 +1612,7 @@ static gboolean packet_parse(InetPacket * pkt, const guint8 * frame, guint lengt
     return parsed;
 }
 
-gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags,
-                           InetFragList * fragments, InetPacket * pkt)
+gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags, InetFragList * fragments, InetPacket * pkt)
 {
     return packet_parse(pkt, frame, length, fragments, 0, flags);
 }
@@ -1665,8 +1626,7 @@ static void flow_count(InetFlowPriv * flow, InetFlowPriv * packet, guint length)
     flow->pub.packets++;
 }
 
-static InetFlowPriv *flow_new(InetFlowTable * table, const InetTuple * tuple,
-                              guint64 timestamp)
+static InetFlowPriv *flow_new(InetFlowTable * table, const InetTuple * tuple, guint64 timestamp)
 {
     InetFlowPriv *flow;
 
@@ -1685,8 +1645,7 @@ static InetFlowPriv *flow_new(InetFlowTable * table, const InetTuple * tuple,
     return flow;
 }
 
-InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length,
-                        guint64 timestamp, guint32 flags, InetPacket * pkt)
+InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length, guint64 timestamp, guint32 flags, InetPacket * pkt)
 {
     InetFlowPriv packet = {.pub.timestamp = timestamp };
     InetPacket tmp_pkt;
@@ -1752,10 +1711,8 @@ InetFlowTable *inet_flow_table_new(GDestroyNotify context_free)
     InetFlowTable *table = g_malloc0(sizeof(InetFlowTable));
     int i;
 
-    table->table = g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare,
-                                         NULL, (GDestroyNotify) inet_flow_free);
-    table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX,
-                                               INET_FRAG_DEFAULT_TIMEOUT);
+    table->table = g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare, NULL, (GDestroyNotify) inet_flow_free);
+    table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX, INET_FRAG_DEFAULT_TIMEOUT);
     table->context_free = context_free;
     for (i = 0; i < LIFETIME_COUNT; i++) {
         table->expire_queue[i] = g_queue_new();
@@ -1774,16 +1731,14 @@ void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows)
     table->max = max_flows;
 }
 
-void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s,
-                                  guint closed_s)
+void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s, guint closed_s)
 {
-    table->timeout_us[LIFETIME_NEW] = (guint64) new_s * TIMESTAMP_RESOLUTION_US;
-    table->timeout_us[LIFETIME_OPEN] = (guint64) open_s * TIMESTAMP_RESOLUTION_US;
-    table->timeout_us[LIFETIME_CLOSED] = (guint64) closed_s * TIMESTAMP_RESOLUTION_US;
+    table->timeout_us[LIFETIME_NEW] = (guint64) new_s *TIMESTAMP_RESOLUTION_US;
+    table->timeout_us[LIFETIME_OPEN] = (guint64) open_s *TIMESTAMP_RESOLUTION_US;
+    table->timeout_us[LIFETIME_CLOSED] = (guint64) closed_s *TIMESTAMP_RESOLUTION_US;
 }
 
-void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams,
-                                     guint timeout_s)
+void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams, guint timeout_s)
 {
     frag_list_limits_set(table->frag_info_list, max_datagrams, timeout_s);
 }
