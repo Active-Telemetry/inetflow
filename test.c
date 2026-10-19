@@ -438,7 +438,7 @@ static guint8 *build_hdr_ipv6_fragment(guint8 * buffer, guint next_ip_protocol,
                                        gboolean reverse, gboolean more_frag_flag_set,
                                        guint16 offset, guint16 id)
 {
-    guint8 *p = build_hdr_ip(buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_FRAGMENT, FALSE);
+    guint8 *p = build_hdr_ip(buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_FRAGMENT, reverse);
     return build_hdr_fragment(p, next_ip_protocol, more_frag_flag_set, offset, id);
 }
 
@@ -1963,6 +1963,44 @@ void test_flow_table_free_fragments()
     inet_flow_table_unref(table);
 }
 
+void test_flow_fragment_direction(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlow *first, *last;
+    InetFlowTable *table;
+    guint8 *p;
+    guint len;
+
+    setup_test();
+    g_assert_nonnull((table = inet_flow_table_new()));
+
+    /* First fragment from the client */
+    p = build_hdr_eth(test_buffer, eth_protocol);
+    p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, FALSE, TRUE, 0, 0xbeef);
+    len = (guint) (p - test_buffer);
+    g_assert_nonnull((first = inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE,
+                                                 FALSE, NULL, NULL)));
+    g_assert(g_list_length(table->frag_info_list->head) == 1);
+
+    /* The last fragment of a datagram from the server with the same ID */
+    p = build_hdr_eth(test_buffer, eth_protocol);
+    p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, TRUE, FALSE, 1, 0xbeef);
+    len = (guint) (p - test_buffer);
+    g_assert_nonnull(inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE, FALSE,
+                                        NULL, NULL));
+    g_assert(g_list_length(table->frag_info_list->head) == 2);
+
+    /* The last fragment from the client still finds the first fragment */
+    p = build_hdr_eth(test_buffer, eth_protocol);
+    p = build_hdr_ip_fragment(p, eth_protocol, IP_PROTOCOL_UDP, FALSE, FALSE, 1, 0xbeef);
+    len = (guint) (p - test_buffer);
+    g_assert_nonnull((last = inet_flow_get_full(table, test_buffer, len, 0, 0, TRUE, TRUE,
+                                                FALSE, NULL, NULL)));
+    g_assert(first == last);
+    g_assert(g_list_length(table->frag_info_list->head) == 1);
+    inet_flow_table_unref(table);
+}
+
 void test_flow_parse_ipv6_fragment()
 {
     guint8 *p;
@@ -2396,6 +2434,10 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/parse/ipv4/fragment", test_flow_parse_ipv4_fragment);
     g_test_add_func("/flow/parse/ipv6/fragment", test_flow_parse_ipv6_fragment);
     g_test_add_func("/flow/table/free_fragments", test_flow_table_free_fragments);
+    g_test_add_data_func("/flow/fragment/direction/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP),
+                         test_flow_fragment_direction);
+    g_test_add_data_func("/flow/fragment/direction/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6),
+                         test_flow_fragment_direction);
     g_test_add_func("/clear/expired_frag_info", test_clear_expired_frag_info);
     g_test_add_func("/flow/expiry/queue", test_flow_expiry_queue);
     g_test_add_func("/flow/match/udp", test_flow_match_udp);

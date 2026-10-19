@@ -289,24 +289,15 @@ static int find_flow_by_frag_info(gconstpointer a, gconstpointer b)
     InetFragment *entry = (InetFragment *) a;
     InetFragment *f = (InetFragment *) b;
 
-    if (entry->id != f->id) {
+    if (entry->id != f->id || entry->tuple.protocol != f->tuple.protocol) {
         return 1;
     }
 
-    /* This is similar to inet_tuple_equal but ignores ports as they
-     * are missing from the fragmented packet. */
-    struct sockaddr_storage *lower_a = inet_tuple_get_lower(&entry->tuple);
-    struct sockaddr_storage *upper_a = inet_tuple_get_upper(&entry->tuple);
-
-    struct sockaddr_storage *src_b = inet_tuple_get_lower(&f->tuple);
-    struct sockaddr_storage *dst_b = inet_tuple_get_upper(&f->tuple);
-
-    if (sock_address_comparison(lower_a, src_b) == 0
-        && sock_address_comparison(upper_a, dst_b) == 0) {
-        return 0;
-    }
-    if (sock_address_comparison(lower_a, dst_b) == 0
-        && sock_address_comparison(upper_a, src_b) == 0) {
+    /* A datagram is identified by its source, destination, protocol and ID,
+     * so a fragment in the other direction belongs to another datagram. The
+     * ports are not in non-first fragments, so only the addresses are compared. */
+    if (sock_address_comparison(&entry->tuple.src, &f->tuple.src) == 0
+        && sock_address_comparison(&entry->tuple.dst, &f->tuple.dst) == 0) {
         return 0;
     }
     return 1;
