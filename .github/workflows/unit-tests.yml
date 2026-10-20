@@ -20,7 +20,7 @@ jobs:
       - name: Configure
         run: |
           ./autogen.sh
-          ./configure
+          ./configure --prefix="$RUNNER_TEMP/inetflow"
 
       - name: Build
         run: |
@@ -32,3 +32,13 @@ jobs:
         run: >-
           G_SLICE=always-malloc valgrind --leak-check=full --error-exitcode=1
           --suppressions=valgrind.supp ./unittest
+
+      # Build a program against the installed library with only pkg-config,
+      # as the README describes
+      - name: Build against the installed library
+        run: |
+          make install
+          export PKG_CONFIG_PATH="$RUNNER_TEMP/inetflow/lib/pkgconfig"
+          printf '#include <inetflow.h>\nint main(void)\n{\n    inet_flow_table_free(inet_flow_table_new());\n    return 0;\n}\n' > "$RUNNER_TEMP/app.c"
+          cc -Wall -Werror -o "$RUNNER_TEMP/app" "$RUNNER_TEMP/app.c" $(pkg-config --cflags --libs inetflow)
+          LD_LIBRARY_PATH="$(pkg-config --variable=libdir inetflow)" "$RUNNER_TEMP/app"
