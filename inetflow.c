@@ -322,10 +322,11 @@ gboolean inet_tuple_equal(const InetTuple * a, const InetTuple * b)
     if (a->protocol != b->protocol || a->family != b->family) {
         return FALSE;
     }
-    return addr_compare(a, inet_tuple_server_addr(a), inet_tuple_server_addr(b)) == 0 &&
-        inet_tuple_server_port(a) == inet_tuple_server_port(b) &&
-        addr_compare(a, inet_tuple_client_addr(a), inet_tuple_client_addr(b)) == 0 &&
-        inet_tuple_client_port(a) == inet_tuple_client_port(b);
+    /* The two directions of a flow have the same tuple, or the same tuple
+     * with its ends swapped, so the server ends need not be found */
+    if (a->sport == b->sport && a->dport == b->dport && addr_compare(a, &a->src, &b->src) == 0 && addr_compare(a, &a->dst, &b->dst) == 0)
+        return TRUE;
+    return a->sport == b->dport && a->dport == b->sport && addr_compare(a, &a->src, &b->dst) == 0 && addr_compare(a, &a->dst, &b->src) == 0;
 }
 
 gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b)

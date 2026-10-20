@@ -2482,6 +2482,33 @@ void test_tuple_equal_mismatch()
     g_assert_false(inet_tuple_equal(&a, &b));
 }
 
+void test_tuple_equal_directions()
+{
+    guint32 a = htonl(0x0a000001), b = htonl(0x0a000002), c = htonl(0x0a000003);
+    InetTuple x, y;
+
+    /* The same port at each end */
+    inet_tuple_set(&x, AF_INET, IP_PROTOCOL_UDP, &a, htons(53), &b, htons(53));
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_UDP, &b, htons(53), &a, htons(53));
+    g_assert_true(inet_tuple_equal(&x, &y));
+    g_assert_true(inet_tuple_equal(&y, &x));
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_UDP, &a, htons(53), &c, htons(53));
+    g_assert_false(inet_tuple_equal(&x, &y));
+
+    /* The same hosts with the ports swapped are another flow */
+    inet_tuple_set(&x, AF_INET, IP_PROTOCOL_TCP, &a, htons(1000), &b, htons(80));
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_TCP, &a, htons(80), &b, htons(1000));
+    g_assert_false(inet_tuple_equal(&x, &y));
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_TCP, &b, htons(80), &a, htons(1000));
+    g_assert_true(inet_tuple_equal(&x, &y));
+
+    /* One end that matches is not enough */
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_TCP, &a, htons(1000), &c, htons(80));
+    g_assert_false(inet_tuple_equal(&x, &y));
+    inet_tuple_set(&y, AF_INET, IP_PROTOCOL_TCP, &c, htons(80), &a, htons(1000));
+    g_assert_false(inet_tuple_equal(&x, &y));
+}
+
 void test_tuple_hash()
 {
     guint32 src = htonl(0x0a000001), src2 = htonl(0x0a000002), dst = htonl(0x0b000001);
@@ -4060,6 +4087,7 @@ int main(int argc, char *argv[])
 
     g_test_add_func("/tuple/equal/mismatch", test_tuple_equal_mismatch);
     g_test_add_func("/tuple/hash", test_tuple_hash);
+    g_test_add_func("/tuple/equal/directions", test_tuple_equal_directions);
     g_test_add_func("/flow/fragment/mismatch", test_flow_fragment_mismatch);
     g_test_add_func("/flow/parse/malformed/gre", test_flow_parse_malformed_gre);
     g_test_add_func("/flow/parse/malformed/ipv4_tcp", test_flow_parse_malformed_ipv4_tcp);
