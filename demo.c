@@ -319,7 +319,7 @@ int main(int argc, char **argv)
 #endif
 
     signal(SIGINT, intHandler);
-    table = inet_flow_table_new(NULL);
+    table = inet_flow_table_new();
     if (filename)
         process_pcap(filename);
     else

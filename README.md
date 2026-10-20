@@ -63,7 +63,7 @@ static InetFlowTable *table;
 
 void flows_init(void)
 {
-    table = inet_flow_table_new(NULL);
+    table = inet_flow_table_new();
 }
 
 void flows_process(const guint8 *frame, guint length, guint64 timestamp_us)
@@ -167,7 +167,7 @@ typedef struct _InetFlow {
     guint64 packets;            /* Packets in both directions */
     guint64 inbytes;            /* Bytes in the reply direction */
     guint64 outbytes;           /* Bytes in the original direction */
-    gpointer context;           /* Owned by the caller, freed by the table */
+    gpointer context;           /* Owned by the caller, see inet_flow_table_context_free_set() */
 } InetFlow;
 ```
 
@@ -388,7 +388,8 @@ linked flow, because the translation changes them.
 
 | Function | Purpose |
 |---|---|
-| `inet_flow_table_new(context_free)` | Create a table. `context_free` frees the context of each flow that is freed, or is NULL. |
+| `inet_flow_table_new()` | Create a table |
+| `inet_flow_table_context_free_set(table, context_free)` | Free the context of each flow that is freed with `context_free`. NULL, the default, leaves the contexts to the caller. |
 | `inet_flow_table_free(table)` | Free a table, its flows and its fragment list |
 | `inet_flow_table_size(table)` | The number of flows |
 | `inet_flow_table_max_set(table, max)` | Limit the number of flows. 0 means no limit. |
@@ -406,7 +407,7 @@ linked flow, because the translation changes them.
 | `inet_flow_establish(table, flow)` | Set a flow open |
 | `inet_flow_close(table, flow)` | Set a flow closed |
 | `inet_flow_foreach(table, func, data)` | Call a function for each flow |
-| `inet_flow_free(flow)` | Free a flow and its context |
+| `inet_flow_free(flow)` | Free a flow, and its context if the table has a context free function |
 | `inet_flow_tcp_state(flow)` | The tracked TCP state of a flow |
 | `inet_flow_tcp_link(flow, linked, client, client_port)` | Share the TCP state of two flows |
 
@@ -448,7 +449,7 @@ linked flow, because the translation changes them.
 |---|---|---|
 | `InetFlowTable` | `inet_flow_table_new()` | `inet_flow_table_free()` |
 | `InetFlow` | `inet_flow_get()` with `INET_FLOW_CREATE`, or `inet_flow_create()` | `inet_flow_free()`, or `inet_flow_table_free()` |
-| `flow->context` | The caller | The table's `context_free` callback when the flow is freed. Without a callback, the caller frees it. |
+| `flow->context` | The caller | The function set by `inet_flow_table_context_free_set()`, when the flow is freed. Without one, the caller frees it. |
 | `InetPacket` | The caller | The caller. It holds no allocated memory. |
 | Fragment list | `inet_frag_list_new()`, or the table | `inet_frag_list_free()`, or the table |
 | TCP state | `inet_flow_get()` with `INET_FLOW_TCP_TRACK` | The library, when the last flow that uses it is freed |
@@ -487,8 +488,7 @@ follows.
   `inet_flow_get_full()`.
 - `inet_flow_parse()` and `inet_flow_parse_ip()` parse a frame into a tuple
   and allocate the tuple when the caller passes NULL.
-- `inet_flow_table_new()` takes no arguments. The flow timeouts and the
-  fragment limits are fixed.
+- The flow timeouts and the fragment limits are fixed.
 - `inet_flow_unref()` and `inet_flow_table_unref()` free flows and tables.
   The library never frees `flow->context`.
 - There is no header validation, fragment range tracking or TCP tracking.
@@ -497,7 +497,7 @@ follows.
 
 | v1 | v2 |
 |---|---|
-| `inet_flow_table_new()` | `inet_flow_table_new(context_free)`, or `inet_flow_table_new(NULL)` to free contexts yourself |
+| `inet_flow_table_new()` | `inet_flow_table_new()`. Add `inet_flow_table_context_free_set()` for the table to free flow contexts. |
 | `inet_flow_table_unref(table)` | `inet_flow_table_free(table)` |
 | `inet_flow_unref(flow)` | `inet_flow_free(flow)` |
 | `inet_flow_get_full(t, f, len, 0, ts, TRUE, TRUE, FALSE, NULL, NULL)` | `inet_flow_get(t, f, len, ts, INET_FLOW_CREATE \| INET_FLOW_UPDATE \| INET_FLOW_L2, NULL)` |
@@ -520,7 +520,7 @@ follows.
 | Filling in `sockaddr` fields of a tuple | `inet_tuple_set()` |
 | `table->hits`, `table->misses`, `flow->hash`, `flow->lifetime` and other internal fields | Not available |
 | A `NULL` return from `inet_flow_get_full()` | Check `pkt.status` for the reason |
-| `flow_context_unref(flow); inet_flow_unref(flow);` | `inet_flow_free(flow)`, with the context freed by the table callback |
+| `flow_context_unref(flow); inet_flow_unref(flow);` | `inet_flow_free(flow)`, with the context freed by the function set by `inet_flow_table_context_free_set()` |
 
 Notes:
 

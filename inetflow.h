@@ -88,7 +88,7 @@ typedef struct _InetFlow {
     guint64 packets;
     guint64 inbytes;            /* Reply direction */
     guint64 outbytes;           /* Original direction */
-    gpointer context;           /* Freed by the table context_free callback */
+    gpointer context;           /* Freed by the function set by inet_flow_table_context_free_set() */
 } InetFlow;
 
 #define inet_flow_protocol(flow) (flow)->tuple.protocol
@@ -205,9 +205,10 @@ typedef struct _InetPacket {
 
 /* InetFlowTable */
 typedef struct _InetFlowTable InetFlowTable;
-InetFlowTable *inet_flow_table_new(GDestroyNotify context_free);
+InetFlowTable *inet_flow_table_new(void);
 void inet_flow_table_free(InetFlowTable * table);
 guint inet_flow_table_size(InetFlowTable * table);
+void inet_flow_table_context_free_set(InetFlowTable * table, GDestroyNotify context_free);
 void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows);
 void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s, guint closed_s);
 void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams, guint timeout_s);

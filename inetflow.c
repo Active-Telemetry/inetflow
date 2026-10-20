@@ -1706,14 +1706,13 @@ void inet_flow_table_free(InetFlowTable * table)
     g_free(table);
 }
 
-InetFlowTable *inet_flow_table_new(GDestroyNotify context_free)
+InetFlowTable *inet_flow_table_new(void)
 {
     InetFlowTable *table = g_malloc0(sizeof(InetFlowTable));
     int i;
 
     table->table = g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare, NULL, (GDestroyNotify) inet_flow_free);
     table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX, INET_FRAG_DEFAULT_TIMEOUT);
-    table->context_free = context_free;
     for (i = 0; i < LIFETIME_COUNT; i++) {
         table->expire_queue[i] = g_queue_new();
         table->timeout_us[i] = (guint64) default_timeouts[i] * TIMESTAMP_RESOLUTION_US;
@@ -1724,6 +1723,11 @@ InetFlowTable *inet_flow_table_new(GDestroyNotify context_free)
 guint inet_flow_table_size(InetFlowTable * table)
 {
     return g_hash_table_size(table->table);
+}
+
+void inet_flow_table_context_free_set(InetFlowTable * table, GDestroyNotify context_free)
+{
+    table->context_free = context_free;
 }
 
 void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows)
