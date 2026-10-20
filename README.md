@@ -27,7 +27,7 @@ The library uses GLib and has no other runtime dependencies.
 - Optionally parses into GRE tunnels, and into IPv4 or IPv6 packets carried in
   IPv4 or IPv6.
 - Matches both directions of a connection to one flow.
-- Gives non-first IP fragments the ports of the first fragment.
+- Gives every fragment of an IP datagram the flow of its first fragment.
 - Expires flows with separate timeouts for new, open and closed flows.
 - Reports malformed headers and options as anomaly flags.
 - Detects overlapping and oversized IP fragments.
@@ -109,7 +109,8 @@ The flags passed to it select which steps run.
 | Update | `INET_FLOW_UPDATE` | The flow state, counters and expiry do not change |
 | Track TCP | `INET_FLOW_TCP_TRACK` | The TCP fields of `InetPacket` hold only the header values |
 
-Non-first fragments get their ports from the fragment list during the parse.
+Later fragments get the flow tuple of their first fragment from the fragment
+list during the parse. See [Fragments](#fragments).
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontFamily': 'Helvetica, Arial, sans-serif', 'primaryColor': '#e3f2fd', 'primaryBorderColor': '#1e88e5', 'primaryTextColor': '#0d2a4a', 'lineColor': '#5c7a99', 'edgeLabelBackground': '#ffffff'}}}%%
@@ -323,27 +324,111 @@ why. Option checks run only with `INET_FLOW_VALIDATE` or `INET_FLOW_TCP_TRACK`.
 
 ### Fragments
 
-Only the first fragment of an IP datagram carries the ports. Each table has a
-fragment list that records the first fragment of each datagram and gives its
-ports to the later fragments. A datagram is identified by its source,
-destination, protocol and IP ID.
+An IP datagram that is larger than the path MTU is sent as several fragments.
+Every fragment has an IP header with the same source, destination, protocol and
+IP ID. Only the first fragment holds the TCP, UDP or SCTP header, so only the
+first fragment has the ports that identify a flow. The library does not
+reassemble datagrams. It returns each fragment as it arrives, and uses a
+fragment list to give each fragment the flow of its datagram.
 
-The list records the byte ranges of each datagram, so it detects overlapping
-fragments in any order. A datagram is tracked until all of its data has been
-seen, or until it expires. By default the list holds 1024 datagrams and each
-expires after 30 seconds. `inet_flow_table_frag_limits_set()` changes this.
+#### Matching fragments to a flow
 
-An IPv6 atomic fragment, with offset 0 and no more fragments, holds a whole
-datagram. It is not tracked, and `fragment` is FALSE for it.
+Each table has a fragment list. The list has an entry for each datagram that
+is in flight, keyed by the source, destination, protocol and IP ID of the
+datagram. The sender gives each datagram in flight its own ID, so many
+datagrams between the same two hosts each have their own entry.
 
-With `INET_FLOW_TUNNEL`, the first fragment of an outer packet holds the inner
-headers, so its flow is the inner flow. Later fragments of the outer packet get
-the inner tuple from the fragment list, and `l3` points to their outer IP
-header. A later fragment that arrives before the first fragment keeps its own
-tuple, which has ports of 0 or is the outer tuple of a tunnel.
+The first fragment of a datagram is parsed normally, and the list stores its
+tuple. Each later fragment looks up the entry and takes the stored tuple, so
+every fragment of the datagram belongs to the same flow. The first fragment can
+arrive after later fragments. Later fragments that arrive before it keep their
+own tuple, which has ports of 0, so they belong to another flow. Fragments that
+arrive after it get the stored tuple.
 
-The library does not reassemble datagrams. Each fragment is returned as it
-arrives.
+| `InetPacket` field | First fragment | Later fragment |
+|---|---|---|
+| `fragment` | TRUE | TRUE |
+| `tuple` | Parsed from the headers | From the fragment list, or ports of 0 before the first fragment |
+| `l3` | The IP header | The IP header |
+| `l4`, `payload` | The transport header and the data in this fragment | NULL |
+| `tcp` | The TCP header | Zero |
+
+Each fragment counts as one packet of the flow, and its frame length is added
+to the byte counters. TCP tracking sees only the first fragment of a segment.
+
+#### When an entry is removed
+
+An entry records the byte ranges of the datagram that have arrived. It is
+removed when the last fragment has arrived and the ranges cover the whole
+datagram. A datagram that loses a fragment never completes, so its entry stays
+until it expires.
+
+An entry expires when its timeout has passed since its first fragment
+arrived, 30 s by default. A fragment that matches an expired entry sets
+`INET_ANOMALY_FRAG_EXPIRED`, and starts a new entry. Expired entries are
+removed when the list is full, oldest first.
+
+The list holds 1024 datagrams by default. When it is full and no entry has
+expired, a fragment of a new datagram sets `INET_ANOMALY_FRAG_LIMIT`, and
+`inet_flow_get()` returns NULL with status `INET_PACKET_FRAG_UNTRACKED`. This
+applies to first fragments too. Fragments of datagrams that already have an
+entry are not affected.
+
+`inet_flow_table_frag_limits_set()` sets the size and the timeout of the list
+of a table. `inet_frag_list_new()` sets them for a list used with
+`inet_packet_parse()`. Each entry uses about 250 bytes, and entries are only
+allocated for datagrams in flight. The time to process a fragment does not
+depend on the size of the list.
+
+#### Anomalies
+
+| Flag | Meaning |
+|---|---|
+| `FRAG_OVERLAP` | The fragment overlaps data of its datagram that has already arrived. The fragment still belongs to the flow. |
+| `FRAG_TOO_LARGE` | The fragment ends past the largest possible IP packet, 65535 bytes |
+| `FRAG_LIMIT` | The list is full, so the datagram is not tracked |
+| `FRAG_EXPIRED` | The fragment matched a datagram whose entry had expired |
+
+An entry records up to eight separate byte ranges. A datagram whose fragments
+arrive with more gaps than that can not complete, and its entry expires.
+
+#### Tunnels
+
+With `INET_FLOW_TUNNEL`, a fragmented outer packet is matched by its outer
+header. The first fragment of the outer packet holds the inner headers, so its
+tuple is the inner tuple, and the later fragments get the inner tuple from the
+list. `l3` of a later fragment points to its outer IP header. The inner length
+checks are skipped inside a fragmented outer packet, because the inner packet
+continues in the later fragments.
+
+#### IPv6 atomic fragments
+
+An IPv6 fragment with offset 0 and no more fragments holds a whole datagram.
+RFC 6946 requires it to be processed apart from other fragments, so it is not
+tracked, and `fragment` is FALSE for it.
+
+#### Without a fragment list
+
+`inet_packet_parse()` accepts a NULL fragment list. Later fragments then keep
+ports of 0, and only `FRAG_TOO_LARGE` is checked.
+
+#### Timestamps
+
+An entry uses the timestamp passed to `inet_flow_get()`, or the monotonic
+clock when the timestamp is 0. `inet_packet_parse()` has no timestamp, so its
+entries always use the monotonic clock. A program that replays a capture
+should use `inet_flow_get()` with the capture timestamps.
+
+#### Limitations
+
+- The IPv4 ID is 16 bits, so a sender reuses an ID after 65536 datagrams to
+  the same destination. If an entry of a datagram that lost a fragment is
+  still in the list, a new datagram with the same ID matches it. This needs
+  more than about 2000 fragmented datagrams per second between two hosts with
+  the default timeout. IPv6 IDs are 32 bits.
+- A first fragment that ends inside its TCP, UDP or SCTP header fails to
+  parse, and is not stored, so the later fragments of its datagram keep ports
+  of 0.
 
 ### TCP tracking
 
