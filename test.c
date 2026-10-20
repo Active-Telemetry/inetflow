@@ -2482,6 +2482,124 @@ void test_tuple_equal_mismatch()
     g_assert_false(inet_tuple_equal(&a, &b));
 }
 
+void test_tuple_hash()
+{
+    guint32 src = htonl(0x0a000001), src2 = htonl(0x0a000002), dst = htonl(0x0b000001);
+    struct in6_addr src6 = IN6ADDR_LOOPBACK_INIT;
+    struct in6_addr dst6 = IN6ADDR_LOOPBACK_INIT;
+    InetTuple a, b;
+
+    dst6.s6_addr[15] = 2;
+
+    /* Both directions of a flow have the same hash */
+    inet_tuple_set(&a, AF_INET, IP_PROTOCOL_UDP, &src, htons(5000), &dst, htons(53));
+    inet_tuple_set(&b, AF_INET, IP_PROTOCOL_UDP, &dst, htons(53), &src, htons(5000));
+    g_assert_cmpuint(inet_tuple_hash(&a), ==, inet_tuple_hash(&b));
+    inet_tuple_set(&a, AF_INET6, IP_PROTOCOL_TCP, &src6, htons(5000), &dst6, htons(80));
+    inet_tuple_set(&b, AF_INET6, IP_PROTOCOL_TCP, &dst6, htons(80), &src6, htons(5000));
+    g_assert_cmpuint(inet_tuple_hash(&a), ==, inet_tuple_hash(&b));
+
+    /* Tuples without ports differ by address and protocol */
+    inet_tuple_set(&a, AF_INET, IP_PROTOCOL_ICMP, &src, 0, &dst, 0);
+    inet_tuple_set(&b, AF_INET, IP_PROTOCOL_ICMP, &src2, 0, &dst, 0);
+    g_assert_cmpuint(inet_tuple_hash(&a), !=, inet_tuple_hash(&b));
+    inet_tuple_set(&b, AF_INET, IP_PROTOCOL_ESP, &src, 0, &dst, 0);
+    g_assert_cmpuint(inet_tuple_hash(&a), !=, inet_tuple_hash(&b));
+}
+
+/* Flows without ports must not share a hash bucket, or each lookup scans every such flow */
+void test_table_hash_portless()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    GHashTable *hashes = g_hash_table_new(NULL, NULL);
+    guint32 dst = htonl(0x0b000001);
+    InetTuple tuple;
+    InetFlow *flow;
+    guint32 i, src;
+
+    for (i = 0; i < 1000; i++) {
+        src = htonl(0x0a000000 + i);
+        inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_ICMP, &src, 0, &dst, 0);
+        g_assert_nonnull((flow = inet_flow_create(table, &tuple, 1000)));
+        g_hash_table_add(hashes, GUINT_TO_POINTER(FLOW_PRIV(flow)->hash));
+    }
+    g_assert_cmpuint(g_hash_table_size(hashes), >, 990);
+
+    /* A packet in the reply direction finds the flow */
+    inet_tuple_set(&tuple, AF_INET, IP_PROTOCOL_ICMP, &dst, 0, &src, 0);
+    g_assert(inet_flow_lookup(table, &tuple) == flow);
+    g_hash_table_destroy(hashes);
+    inet_flow_table_free(table);
+}
+
+/* The seed fixes the hash, so this runs in a new process that has not hashed
+ * a flow. The expected values do not depend on the CPU or the system. */
+void test_table_hash_seed()
+{
+    if (g_test_subprocess()) {
+        guint32 a = htonl(0x0a000001), b = htonl(0xc0a80001);
+        struct in6_addr a6 = IN6ADDR_LOOPBACK_INIT, b6 = IN6ADDR_LOOPBACK_INIT;
+        InetFlowTable *table;
+        InetTuple t, r;
+        InetFlow *flow;
+
+        b6.s6_addr[0] = 0x20;
+        g_assert_true(inet_flow_hash_seed_set(42));
+        g_assert_false(inet_flow_hash_seed_set(43));
+        inet_tuple_set(&t, AF_INET, IP_PROTOCOL_TCP, &a, htons(40000), &b, htons(80));
+        inet_tuple_set(&r, AF_INET, IP_PROTOCOL_TCP, &b, htons(80), &a, htons(40000));
+        g_assert_cmphex(inet_tuple_hash(&t), ==, 0x8184660c);
+        g_assert_cmphex(inet_tuple_hash(&r), ==, 0x8184660c);
+        inet_tuple_set(&t, AF_INET6, IP_PROTOCOL_UDP, &a6, htons(5353), &b6, htons(53));
+        inet_tuple_set(&r, AF_INET6, IP_PROTOCOL_UDP, &b6, htons(53), &a6, htons(5353));
+        g_assert_cmphex(inet_tuple_hash(&t), ==, 0x7e4e4f5d);
+        g_assert_cmphex(inet_tuple_hash(&r), ==, 0x7e4e4f5d);
+
+        /* A table uses the same hash */
+        table = inet_flow_table_new();
+        t.hash = 0;
+        g_assert_nonnull((flow = inet_flow_create(table, &t, 1000)));
+        g_assert_cmphex(flow->tuple.hash, ==, 0x7e4e4f5d);
+        inet_flow_table_free(table);
+        return;
+    }
+    g_test_trap_subprocess(NULL, 0, 0);
+    g_test_trap_assert_passed();
+
+    /* Once a table has chosen the multipliers, the seed can not change them */
+    inet_flow_table_free(inet_flow_table_new());
+    g_assert_false(inet_flow_hash_seed_set(42));
+}
+
+/* inet_flow_get() stores the hash it computes in the packet and flow tuples,
+ * and every table and inet_tuple_hash() compute the same hash */
+void test_table_hash_stored()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlowTable *other = inet_flow_table_new();
+    InetPacket pkt, reply;
+    InetTuple copy;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt)));
+    g_assert_cmpuint(pkt.tuple.hash, !=, 0);
+    g_assert_cmpuint(flow->tuple.hash, ==, pkt.tuple.hash);
+    g_assert_cmpuint(FLOW_PRIV(flow)->hash, ==, pkt.tuple.hash);
+    copy = pkt.tuple;
+    copy.hash = 0;
+    g_assert_cmpuint(inet_tuple_hash(&copy), ==, pkt.tuple.hash);
+    len = make_pkt_reverse(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
+    g_assert(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &reply) == flow);
+    g_assert_cmpuint(reply.tuple.hash, ==, pkt.tuple.hash);
+    g_assert_nonnull((flow = inet_flow_get(other, test_buffer, len, 0, FLOW_GET, &reply)));
+    g_assert_cmpuint(flow->tuple.hash, ==, pkt.tuple.hash);
+    inet_flow_table_free(other);
+    inet_flow_table_free(table);
+}
+
 void test_flow_fragment_mismatch()
 {
     InetFlowTable *table = inet_flow_table_new();
@@ -3941,6 +4059,7 @@ int main(int argc, char *argv[])
     g_test_add_data_func("/flow/fragment/limit/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_fragment_limit);
 
     g_test_add_func("/tuple/equal/mismatch", test_tuple_equal_mismatch);
+    g_test_add_func("/tuple/hash", test_tuple_hash);
     g_test_add_func("/flow/fragment/mismatch", test_flow_fragment_mismatch);
     g_test_add_func("/flow/parse/malformed/gre", test_flow_parse_malformed_gre);
     g_test_add_func("/flow/parse/malformed/ipv4_tcp", test_flow_parse_malformed_ipv4_tcp);
@@ -4029,6 +4148,9 @@ int main(int argc, char *argv[])
     g_test_add_func("/table/context_free", test_table_context_free);
     g_test_add_func("/table/timeouts", test_table_timeouts);
     g_test_add_func("/table/frag_limits", test_table_frag_limits);
+    g_test_add_func("/table/hash/portless", test_table_hash_portless);
+    g_test_add_func("/table/hash/stored", test_table_hash_stored);
+    g_test_add_func("/table/hash/seed", test_table_hash_seed);
     g_test_add_func("/frag_list/standalone", test_frag_list_standalone);
 
     rc = g_test_run();

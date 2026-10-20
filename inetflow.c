@@ -336,15 +336,90 @@ gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b)
     return addr_compare(a, &a->src, &b->src) == 0 && a->sport == b->sport && addr_compare(a, &a->dst, &b->dst) == 0 && a->dport == b->dport;
 }
 
+/* Odd 64-bit multipliers, chosen at random once for each process, so that
+ * hash collisions can not be chosen in advance. inet_tuple_hash() and every
+ * flow table must give a tuple the same hash, so the multipliers belong to
+ * the process and not to a table. */
+#define HASH_KEYS 5
+static guint64 hash_keys[HASH_KEYS];
+static gsize hash_keys_set;
+
+/* The multipliers can be chosen once, before any flow is hashed. A table
+ * keeps the hashes of its flows, so other multipliers would not find them. */
+static gboolean hash_keys_from_seed(guint64 seed)
+{
+    int i;
+
+    if (!g_once_init_enter(&hash_keys_set))
+        return FALSE;
+    /* splitmix64 gives well mixed multipliers from any seed, including 0 */
+    for (i = 0; i < HASH_KEYS; i++) {
+        guint64 z = (seed += 0x9e3779b97f4a7c15ULL);
+        z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+        hash_keys[i] = (z ^ (z >> 31)) | 1;
+    }
+    g_once_init_leave(&hash_keys_set, 1);
+    return TRUE;
+}
+
+static void hash_keys_init(void)
+{
+    if (!g_atomic_pointer_get(&hash_keys_set))
+        hash_keys_from_seed((guint64) g_random_int() << 32 | g_random_int());
+}
+
+gboolean inet_flow_hash_seed_set(guint64 seed)
+{
+    return hash_keys_from_seed(seed);
+}
+
+/* Multiply each pair of words by its own random multiplier and sum the
+ * products. The high half of the sum depends on every bit of the words.
+ * This costs two multiplications for an IPv4 tuple. */
+static guint32 hash_words(const guint32 * k, guint n, guint32 seed)
+{
+    guint64 h = (guint64) seed << 32 | seed;
+    guint i;
+
+    hash_keys_init();
+    for (i = 0; i + 1 < n; i += 2)
+        h += ((guint64) k[i] | (guint64) k[i + 1] << 32) * hash_keys[i / 2];
+    if (n & 1)
+        h += (guint64) k[n - 1] * hash_keys[n / 2];
+    return h >> 32;
+}
+
+/* Hash the server end before the client end, so that both directions of a
+ * flow have the same hash. The words are in host byte order and the family
+ * is the IP version, so a seeded hash is the same on every CPU and system. */
+static guint32 tuple_hash(const InetTuple * tuple)
+{
+    gboolean src_is_server = tuple_src_is_server(tuple);
+    const InetAddr *server = src_is_server ? &tuple->src : &tuple->dst;
+    const InetAddr *client = src_is_server ? &tuple->dst : &tuple->src;
+    guint16 server_port = src_is_server ? tuple->sport : tuple->dport;
+    guint16 client_port = src_is_server ? tuple->dport : tuple->sport;
+    guint addr_words = tuple->family == AF_INET ? 1 : 4;
+    guint32 words[10];
+    guint n = 0;
+    guint i;
+
+    for (i = 0; i < addr_words; i++)
+        words[n++] = GUINT32_FROM_BE(((const guint32 *)server)[i]);
+    for (i = 0; i < addr_words; i++)
+        words[n++] = GUINT32_FROM_BE(((const guint32 *)client)[i]);
+    words[n++] = (guint32) GUINT16_FROM_BE(server_port) << 16 | GUINT16_FROM_BE(client_port);
+    words[n++] = (guint32) (tuple->family == AF_INET ? 4 : 6) << 8 | tuple->protocol;
+    return hash_words(words, n, 0);
+}
+
+/* The flow tables use this hash, and keep it in the tuple of each packet and
+ * flow, so for those tuples this returns the stored value */
 guint inet_tuple_hash(InetTuple * tuple)
 {
-    if (tuple->hash)
-        return tuple->hash;
-
-    guint16 lport = GUINT16_FROM_BE(inet_tuple_server_port(tuple));
-    guint16 uport = GUINT16_FROM_BE(inet_tuple_client_port(tuple));
-    tuple->hash = lport << 16 | uport;
-
+    if (!tuple->hash)
+        tuple->hash = tuple_hash(tuple);
     return tuple->hash;
 }
 
@@ -532,11 +607,8 @@ static guint32 get_hdr_len(guint8 hdr_ext_len)
 
 static guint32 flow_hash(InetFlowPriv * f)
 {
-    if (f->hash)
-        return f->hash;
-
-    f->hash = inet_tuple_hash(&f->pub.tuple);
-
+    if (!f->hash)
+        f->hash = inet_tuple_hash(&f->pub.tuple);
     return f->hash;
 }
 
@@ -1669,6 +1741,8 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
     packet.pub.tuple = pkt->tuple;
     packet.flags = pkt->tcp.flags;
     flow = g_hash_table_lookup(table->table, &packet);
+    /* The lookup hashed the packet tuple, and a new flow keeps the hash */
+    pkt->tuple.hash = packet.pub.tuple.hash;
     if (flow) {
         if (flags & INET_FLOW_UPDATE) {
             inet_flow_update(flow, &packet);
@@ -1729,6 +1803,8 @@ InetFlowTable *inet_flow_table_new(void)
      * existing flow when a flow with the same tuple is inserted. */
     table->table = g_hash_table_new((GHashFunc) flow_hash, (GEqualFunc) flow_compare);
     table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX, INET_FRAG_DEFAULT_TIMEOUT);
+    /* Choose the hash multipliers now, and not on the first packet */
+    hash_keys_init();
     for (i = 0; i < LIFETIME_COUNT; i++) {
         table->expire_queue[i] = g_queue_new();
         table->timeout_us[i] = (guint64) default_timeouts[i] * TIMESTAMP_RESOLUTION_US;

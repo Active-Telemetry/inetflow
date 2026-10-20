@@ -144,13 +144,56 @@ typedef struct _InetTuple {
     guint8 family;              /* AF_INET or AF_INET6 */
     guint8 protocol;            /* IP protocol */
     guint16 offset;             /* Offset of the transport header in the frame */
-    guint32 hash;               /* Set by inet_tuple_hash(), or 0 */
+    guint32 hash;               /* Set by inet_tuple_hash() and inet_flow_get(), or 0 */
 } InetTuple;
 ```
 
 `inet_tuple_equal()` treats the two directions of a flow as equal.
 `inet_tuple_exact()` compares the ends in order. The server end of a tuple is
 the end with the lower port, or the lower address when the ports are equal.
+
+#### Flow hash
+
+The flow tables find a flow by a hash of its tuple, and `inet_tuple_hash()`
+returns the same hash.
+
+- It is the same in both directions of a flow.
+- It covers both addresses, both ports, the protocol and the IP version.
+- It is computed once per packet. `inet_flow_get()` stores it in
+  `pkt.tuple.hash` and in the tuple of a new flow.
+- It is random for each process, so spoofed packets can not be made to share
+  a hash.
+
+To match hashes between processes or devices, set the same seed in each,
+before the first table:
+
+```c
+inet_flow_hash_seed_set(0x5eed);    /* FALSE once a table or hash exists */
+table = inet_flow_table_new();
+```
+
+- A seeded hash is the same on every CPU and system.
+- Keep the seed private, because anyone who knows it can make flows share a
+  hash.
+
+Comparison of InetFlow-1.0 vs InetFlow-2.0, as the time to find a flow in the
+table in nanoseconds:
+
+| Flows in the table | Typical traffic, 1.0 | Typical traffic, 2.0 | Fixed ports, 1.0 | Fixed ports, 2.0 |
+|---|---|---|---|---|
+| 100 | 24 | 29 | 420 | 32 |
+| 1 000 | 17 | 24 | 4 019 | 24 |
+| 10 000 | 33 | 37 | 41 624 | 34 |
+| 100 000 | 69 | 69 | 554 000 | 55 |
+| 1 000 000 | 1 621 | 100 | PENDING | 101 |
+
+- Typical traffic is clients at random addresses and ports, to 100 servers on
+  ports 80 and 443.
+- Fixed ports is the same port at each end, as for DNS, NTP or IKE. ICMP and
+  other protocols without ports behave the same way.
+- 20 000 spoofed tuples that share one hash take 78 us per lookup when the
+  seed is known, and 24 ns with the random default.
+- Medians on an AMD Ryzen 7 7700X, with GCC 11 at `-O2` and GLib 2.72.
 
 ### Flows
 
@@ -437,7 +480,8 @@ linked flow, because the translation changes them.
 | `inet_tuple_set(tuple, family, protocol, src, sport, dst, dport)` | Fill in a tuple. Ports are in network byte order. |
 | `inet_tuple_equal(a, b)` | TRUE for the same flow in either direction |
 | `inet_tuple_exact(a, b)` | TRUE for the same flow in the same direction |
-| `inet_tuple_hash(tuple)` | The hash of a tuple |
+| `inet_tuple_hash(tuple)` | The hash of a tuple, which is the same in both directions. It is the hash the flow tables use, and `inet_flow_get()` stores it in the packet and flow tuples, so for those it returns the stored value. See [Flow hash](#flow-hash). |
+| `inet_flow_hash_seed_set(seed)` | Make the hash the same in every process with the same seed. Call it before the first flow table. |
 | `inet_tuple_server_addr(tuple)`, `inet_tuple_server_port(tuple)` | The server end |
 | `inet_tuple_client_addr(tuple)`, `inet_tuple_client_port(tuple)` | The client end |
 | `inet_tuple_to_sockaddr(tuple, src, out)` | Copy one end into a `struct sockaddr_storage` |
@@ -525,6 +569,9 @@ follows.
 Notes:
 
 - Ports in the tuple stay in network byte order, as in v1.
+- `inet_tuple_hash()` returns other values than in v1, and they are random for
+  each process. Call `inet_flow_hash_seed_set()` to compare them between
+  processes.
 - `inet_tuple_exact()` now compares the ports as well as the addresses.
 - `inet_ntop(t->family, &t->src, buf, len)` works for both families, because
   the address is at the start of `InetAddr`.

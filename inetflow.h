@@ -71,6 +71,10 @@ void inet_tuple_to_sockaddr(const InetTuple * tuple, gboolean src, struct sockad
 gboolean inet_tuple_equal(const InetTuple * a, const InetTuple * b);
 gboolean inet_tuple_exact(const InetTuple * a, const InetTuple * b);
 guint inet_tuple_hash(InetTuple * tuple);
+/* Make the flow hash depend only on seed, so that it is the same in every
+ * process that sets the same seed. Without it the hash is random for each
+ * process. Returns FALSE when a flow table or a hash already exists. */
+gboolean inet_flow_hash_seed_set(guint64 seed);
 
 /* InetFragList */
 #define INET_FRAG_DEFAULT_MAX                 128
