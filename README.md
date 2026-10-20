@@ -336,6 +336,12 @@ expires after 30 seconds. `inet_flow_table_frag_limits_set()` changes this.
 An IPv6 atomic fragment, with offset 0 and no more fragments, holds a whole
 datagram. It is not tracked, and `fragment` is FALSE for it.
 
+With `INET_FLOW_TUNNEL`, the first fragment of an outer packet holds the inner
+headers, so its flow is the inner flow. Later fragments of the outer packet get
+the inner tuple from the fragment list, and `l3` points to their outer IP
+header. A later fragment that arrives before the first fragment keeps its own
+tuple, which has ports of 0 or is the outer tuple of a tunnel.
+
 The library does not reassemble datagrams. Each fragment is returned as it
 arrives.
 

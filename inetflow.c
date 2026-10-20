@@ -78,7 +78,9 @@ typedef struct _InetFragment {
     GList link;                 /* Link in the age queue of the fragment list */
     guint32 hash;
     guint32 id;
-    InetTuple tuple;
+    InetTuple tuple;            /* The key, with the protocol of the fragmented payload */
+    InetTuple flow;             /* The tuple of the flow, from the first fragment */
+    gboolean flow_known;        /* The first fragment has been seen */
     guint64 timestamp;
     guint32 offset;             /* Byte offset of the fragment data in the datagram */
     guint32 length;             /* Bytes of data in the fragment */
@@ -538,6 +540,10 @@ static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guin
     entry->hash = f->hash;
     entry->id = f->id;
     entry->tuple = f->tuple;
+    if (f->offset == 0) {
+        entry->flow = f->flow;
+        entry->flow_known = TRUE;
+    }
     entry->timestamp = timestamp;
     entry->total = f->total;
     add_frag_range(entry, f->offset, f->offset + f->length);
@@ -547,8 +553,9 @@ static gboolean store_frag_info(InetFragList * fragments, InetFragment * f, guin
 }
 
 /* Match a fragment to its datagram. The entry gives the fragment offset and
- * length, and returns the ports and the anomalies. Returns FALSE when the
- * datagram can not be tracked. */
+ * length, and the flow tuple of a first fragment. It returns the flow tuple of
+ * a later fragment and the anomalies. Returns FALSE when the datagram can not
+ * be tracked. */
 static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry, gboolean more_fragments)
 {
     guint32 start = entry->offset;
@@ -581,14 +588,14 @@ static gboolean frag_list_update(InetFragList * fragments, InetFragment * entry,
     if (!more_fragments)
         found->total = end;
 
-    /* The first fragment holds the ports. It can arrive after other fragments,
-     * so store its ports, or give the stored ports to a later fragment. */
+    /* Only the first fragment holds the ports, and the inner headers of a
+     * tunnel. It can arrive after other fragments, so store its flow tuple, or
+     * give the stored flow tuple to a later fragment. */
     if (start == 0) {
-        found->tuple.sport = entry->tuple.sport;
-        found->tuple.dport = entry->tuple.dport;
-    } else {
-        entry->tuple.sport = found->tuple.sport;
-        entry->tuple.dport = found->tuple.dport;
+        found->flow = entry->flow;
+        found->flow_known = TRUE;
+    } else if (found->flow_known) {
+        entry->flow = found->flow;
     }
 
     /* Stop tracking the datagram once all of its data has been seen */
@@ -863,6 +870,8 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
 {
     InetTuple *f = &pkt->tuple;
     ip_hdr_t *iph = (ip_hdr_t *) data;
+    gboolean in_fragment = pkt->fragment;       /* An enclosing packet is a fragment */
+    InetTuple key;
     guint32 hdr_len;
     guint16 tot_len;
 
@@ -887,13 +896,15 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     tot_len = GUINT16_FROM_BE(iph->tot_len);
     if (tot_len < hdr_len)
         set_anomaly(pkt, INET_ANOMALY_IPV4_LEN_TOO_SMALL);
-    else if (tot_len > length)
-        set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
-    else
+    else if (tot_len > length) {
+        /* A fragment of an enclosing packet holds only the start of this one */
+        if (!in_fragment)
+            set_anomaly(pkt, INET_ANOMALY_IPV4_TRUNCATED);
+    } else
         /* Ignore link layer padding after the end of the IP packet */
         length = tot_len;
     set_headers(pkt, data, (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0 ? data + hdr_len : NULL);
-    pkt->fragment = (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) != 0;
+    pkt->fragment = in_fragment || (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) != 0;
 
     f->family = AF_INET;
     memset(&f->src, 0, sizeof(f->src));
@@ -903,6 +914,7 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
 
     DEBUG("Protocol: %d\n", iph->protocol);
     inet_tuple_set_protocol(f, iph->protocol);
+    key = *f;
 
     f->offset += hdr_len;
     /* Don't bother with this for non-first fragments */
@@ -951,8 +963,10 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
      */
     if (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) {
         InetFragment entry = { 0 };
+        guint16 offset = f->offset;
         entry.id = iph->id;
-        entry.tuple = *f;
+        entry.tuple = key;
+        entry.flow = *f;
         entry.timestamp = ts;
         entry.offset = (GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) * EIGHT_OCTET_UNITS;
         entry.length = length - hdr_len;
@@ -966,7 +980,8 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
 
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
-        *f = entry.tuple;
+        *f = entry.flow;
+        f->offset = offset;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;
         return result;
@@ -982,6 +997,7 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     ip6_hdr_t *iph = (ip6_hdr_t *) data;
     frag_hdr_t *fragment_hdr = NULL;
     guint32 frag_length = 0;
+    InetTuple key;
     auth_hdr_t *auth_hdr;
     ipv6_partial_ext_hdr_t *ipv6_part_hdr;
 
@@ -994,13 +1010,14 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
     /* Ignore link layer padding after the end of the IP packet. A payload
      * length of zero means a jumbogram, where the length is in an option. */
     if (iph->pay_len) {
-        if (sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len) > length)
-            set_anomaly(pkt, INET_ANOMALY_IPV6_TRUNCATED);
-        else
+        if (sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len) > length) {
+            /* A fragment of an enclosing packet holds only the start of this one */
+            if (!pkt->fragment)
+                set_anomaly(pkt, INET_ANOMALY_IPV6_TRUNCATED);
+        } else
             length = sizeof(ip6_hdr_t) + GUINT16_FROM_BE(iph->pay_len);
     }
     set_headers(pkt, data, NULL);
-    pkt->fragment = FALSE;
 
     f->family = AF_INET6;
     memcpy(&f->src.v6, iph->saddr, sizeof(f->src.v6));
@@ -1080,6 +1097,9 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
         }
         fragment_hdr = (frag_hdr_t *) data;
         pkt->fragment = TRUE;
+        /* Later fragments have no headers after this one, so the key has the
+         * protocol of the fragmented payload */
+        key = *f;
 
         data += sizeof(frag_hdr_t);
         length -= sizeof(frag_hdr_t);
@@ -1118,8 +1138,10 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
      */
     if (fragment_hdr) {
         InetFragment entry = { 0 };
+        guint16 offset = f->offset;
         entry.id = fragment_hdr->id;
-        entry.tuple = *f;
+        entry.tuple = key;
+        entry.flow = *f;
         entry.timestamp = ts;
         entry.offset = GUINT16_FROM_BE(fragment_hdr->fo_res_mflag) & 0xFFF8;
         entry.length = frag_length;
@@ -1133,7 +1155,8 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
 
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
-        *f = entry.tuple;
+        *f = entry.flow;
+        f->offset = offset;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;
         return result;

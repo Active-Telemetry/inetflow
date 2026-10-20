@@ -3550,6 +3550,91 @@ void test_fragment_expiry_order(gconstpointer data)
     inet_flow_table_free(table);
 }
 
+/* Build a fragment of an outer packet that carries IPv4 in IP. The first
+ * fragment holds the inner IPv4 and UDP headers and 4 bytes of padding. */
+static guint make_tunnel_fragment(guint8 * buffer, guint16 eth_protocol, gboolean first, guint16 id)
+{
+    guint8 *p = build_hdr_eth(buffer, eth_protocol);
+
+    if (eth_protocol == ETH_PROTOCOL_IP)
+        p = build_hdr_ipv4_fragment(p, IP_PROTOCOL_IPV4, FALSE, first, first ? 0 : 4, id);
+    else
+        p = build_hdr_ipv6_fragment(p, IP_PROTOCOL_IPV4, FALSE, first, first ? 0 : 4, id);
+    if (first) {
+        ip_hdr_t *inner = (ip_hdr_t *) p;
+        p = build_hdr_ipv4(p, IP_PROTOCOL_UDP, FALSE);
+        /* The inner packet continues in the next fragment */
+        inner->tot_len = htons(1400);
+        p = build_hdr_udp(p, FALSE);
+    }
+    memset(p, 0, 4);
+    return (guint) (p + 4 - buffer);
+}
+
+/* Every fragment of an outer packet belongs to the flow of the inner packet */
+void test_fragment_tunnel(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    guint32 flags = FLOW_GET | INET_FLOW_TUNNEL;
+    InetFlow *flow;
+    InetPacket pkt;
+    guint len;
+
+    setup_test();
+    len = make_tunnel_fragment(test_buffer, eth_protocol, TRUE, 0x77);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, flags, &pkt)));
+    g_assert_true(pkt.fragment);
+    g_assert_cmpuint(pkt.tuple.family, ==, AF_INET);
+    g_assert_cmpuint(pkt.tuple.protocol, ==, IP_PROTOCOL_UDP);
+    g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
+    g_assert_cmphex(pkt.anomalies & (INET_ANOMALY_IPV4_TRUNCATED | INET_ANOMALY_UDP_LEN_INVALID), ==, 0);
+
+    len = make_tunnel_fragment(test_buffer, eth_protocol, FALSE, 0x77);
+    g_assert(inet_flow_get(table, test_buffer, len, 0, flags, &pkt) == flow);
+    g_assert_true(pkt.fragment);
+    g_assert_null(pkt.l4);
+    g_assert(pkt.l3 == test_buffer + sizeof(ethernet_hdr_t));
+    g_assert_cmpuint(flow->packets, ==, 2);
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 0);
+
+    /* A later fragment that arrives first has the outer tuple */
+    len = make_tunnel_fragment(test_buffer, eth_protocol, FALSE, 0x78);
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, flags, &pkt));
+    g_assert_cmpuint(pkt.tuple.protocol, ==, IP_PROTOCOL_IPV4);
+    len = make_tunnel_fragment(test_buffer, eth_protocol, TRUE, 0x78);
+    g_assert(inet_flow_get(table, test_buffer, len, 0, flags, &pkt) == flow);
+    inet_flow_table_free(table);
+}
+
+/* Only the first fragment holds the headers after the fragment header, so the
+ * datagram is identified by the protocol in the fragment header */
+void test_fragment_ipv6_ext_after_fragment()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+    InetPacket pkt;
+    guint8 *p;
+
+    setup_test();
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
+    p = build_hdr_ipv6_fragment(p, IP_PROTOCOL_DEST_OPT, FALSE, TRUE, 0, 0x99);
+    p = build_hdr_ipv6_part(p, IP_PROTOCOL_UDP);
+    p = build_hdr_udp(p, FALSE);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, (guint) (p - test_buffer), 0, FLOW_GET, &pkt)));
+    g_assert_cmpuint(pkt.tuple.protocol, ==, IP_PROTOCOL_UDP);
+
+    /* The first fragment holds 48 bytes */
+    p = build_hdr_eth(test_buffer, ETH_PROTOCOL_IPV6);
+    p = build_hdr_ipv6_fragment(p, IP_PROTOCOL_DEST_OPT, FALSE, FALSE, 6, 0x99);
+    memset(p, 0, 8);
+    g_assert(inet_flow_get(table, test_buffer, (guint) (p + 8 - test_buffer), 0, FLOW_GET, &pkt) == flow);
+    g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
+    g_assert_cmpuint(g_hash_table_size(table->frag_info_list->table), ==, 0);
+    inet_flow_table_free(table);
+}
+
 void test_fragment_overlap(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
@@ -4471,6 +4556,9 @@ int main(int argc, char *argv[])
 
     g_test_add_data_func("/fragment/overlap/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_overlap);
     g_test_add_data_func("/fragment/overlap/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_overlap);
+    g_test_add_data_func("/fragment/tunnel/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_tunnel);
+    g_test_add_data_func("/fragment/tunnel/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_tunnel);
+    g_test_add_func("/fragment/ipv6/ext_after_fragment", test_fragment_ipv6_ext_after_fragment);
     g_test_add_data_func("/fragment/many/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_many_datagrams);
     g_test_add_data_func("/fragment/many/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_fragment_many_datagrams);
     g_test_add_data_func("/fragment/expiry_order/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_fragment_expiry_order);
