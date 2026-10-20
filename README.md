@@ -243,10 +243,12 @@ stateDiagram-v2
 `inet_flow_establish()` and `inet_flow_close()` set the state of a flow, for
 callers that learn about the connection another way.
 
-The direction of a TCP packet is `FLOW_DIRECTION_ORIGINAL` when its
-destination port is the destination port of the last SYN. The direction of a
-UDP packet is `FLOW_DIRECTION_ORIGINAL` when its destination port is lower
-than its source port.
+A packet in the direction of the first packet of a flow is
+`FLOW_DIRECTION_ORIGINAL`, and a packet in the other direction is
+`FLOW_DIRECTION_REPLY`. A TCP SYN changes the original direction to the
+direction of the SYN. Packets are compared by address and port, so a flow with
+the same port at each end has two directions. `outbytes` counts the original
+direction and `inbytes` counts the reply direction, for all protocols.
 
 ### Packets
 

@@ -61,7 +61,7 @@ typedef struct _InetFlowPriv {
     GList list;                 /* Link in the expiry queue of the lifetime */
     guint8 lifetime;
     guint16 flags;              /* TCP flags of the packet, for lookups */
-    guint16 server_port;
+    gboolean reversed;          /* The original direction is the reverse of the flow tuple */
     guint32 hash;
     struct _InetTcpFlow *tcp;   /* Created by INET_FLOW_TCP_TRACK */
 } InetFlowPriv;
@@ -1672,9 +1672,8 @@ void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * cli
     FLOW_PRIV(linked)->tcp = tcp_flow;
 }
 
-/* Update the flow state and lifetime for a packet, and find the direction of
- * the packet. The lifetime is changed while the flow is out of the expiry
- * queues. */
+/* Update the flow state and lifetime for a packet. The lifetime is changed
+ * while the flow is out of the expiry queues. */
 static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     /* FIN */
@@ -1694,7 +1693,8 @@ static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
         } else {
             flow->pub.state = FLOW_NEW;
             flow->lifetime = LIFETIME_NEW;
-            flow->server_port = inet_tuple_get_dst_port(&packet->pub.tuple);
+            /* The client sends the SYN, so its direction is the original one */
+            flow->reversed = !inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple);
         }
     }
     /* RST */
@@ -1702,17 +1702,10 @@ static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
         flow->pub.state = FLOW_CLOSED;
         flow->lifetime = LIFETIME_CLOSED;
     }
-
-    packet->pub.direction = inet_tuple_get_dst_port(&packet->pub.tuple) == flow->server_port ?
-        FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
 }
 
 static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    packet->pub.direction =
-        inet_tuple_get_dst_port(&packet->pub.tuple) <
-        inet_tuple_get_src_port(&packet->pub.tuple) ? FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
-
     if (flow->pub.direction && packet->pub.direction && packet->pub.direction != flow->pub.direction) {
         flow->pub.state = FLOW_OPEN;
         flow->lifetime = LIFETIME_OPEN;
@@ -1722,11 +1715,16 @@ static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 static void inet_flow_update(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     remove_flow_by_expiry(flow);
-    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_TCP) {
+    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_TCP)
         inet_flow_update_tcp(flow, packet);
-    } else if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_UDP) {
+    /* The flow tuple is the tuple of the first packet, which gives the
+     * original direction until a TCP SYN is seen. The tuples are compared
+     * with their addresses, so that a flow with the same port at each end
+     * has two directions. */
+    packet->pub.direction = inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple) != flow->reversed ?
+        FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
+    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_UDP)
         inet_flow_update_udp(flow, packet);
-    }
     insert_flow_by_expiry(flow);
     flow->pub.direction = packet->pub.direction;
 }

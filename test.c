@@ -2989,6 +2989,71 @@ void test_tuple_exact_ports()
     g_assert_false(inet_tuple_exact(&t1, &t2));
 }
 
+static InetFlow *direction_send(InetFlowTable * table, guint len, guint8 direction)
+{
+    InetPacket pkt;
+    InetFlow *flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt);
+
+    g_assert_nonnull(flow);
+    g_assert_cmpuint(pkt.direction, ==, direction);
+    return flow;
+}
+
+void test_flow_direction(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    guint protocols[] = { IP_PROTOCOL_UDP, eth_protocol == ETH_PROTOCOL_IP ? IP_PROTOCOL_ICMP : IP_PROTOCOL_ICMPV6 };
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+    guint len;
+    int i;
+
+    setup_test();
+    /* A TCP flow first seen mid-stream takes its original direction from the first packet */
+    len = make_tcp_pkt(test_buffer, eth_protocol, TRUE, ACK, 5000, 1000, 1000, "reply");
+    flow = direction_send(table, len, FLOW_DIRECTION_ORIGINAL);
+    g_assert_cmpuint(flow->outbytes, ==, len);
+    len = make_tcp_pkt(test_buffer, eth_protocol, FALSE, ACK, 1000, 5005, 1000, "request");
+    direction_send(table, len, FLOW_DIRECTION_REPLY);
+    g_assert_cmpuint(flow->inbytes, ==, len);
+
+    /* A SYN makes the client direction the original one */
+    len = make_tcp_pkt(test_buffer, eth_protocol, FALSE, SYN, 2000, 0, 1000, NULL);
+    direction_send(table, len, FLOW_DIRECTION_ORIGINAL);
+    len = make_tcp_pkt(test_buffer, eth_protocol, TRUE, SYN_ACK, 6000, 2001, 1000, NULL);
+    direction_send(table, len, FLOW_DIRECTION_REPLY);
+    inet_flow_table_free(table);
+
+    /* UDP and ICMP flows take their original direction from the first packet */
+    for (i = 0; i < G_N_ELEMENTS(protocols); i++) {
+        table = inet_flow_table_new();
+        len = make_pkt_reverse(test_buffer, eth_protocol, protocols[i]);
+        flow = direction_send(table, len, FLOW_DIRECTION_ORIGINAL);
+        len = make_pkt(test_buffer, eth_protocol, protocols[i]);
+        direction_send(table, len, FLOW_DIRECTION_REPLY);
+        g_assert_cmpuint(flow->outbytes, ==, len);
+        g_assert_cmpuint(flow->inbytes, ==, len);
+        if (protocols[i] == IP_PROTOCOL_UDP)
+            g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+        inet_flow_table_free(table);
+    }
+
+    /* With the same port at each end the addresses give the direction */
+    TEST_DPORT = TEST_SPORT;
+    table = inet_flow_table_new();
+    len = make_tcp_pkt(test_buffer, eth_protocol, FALSE, SYN, 2000, 0, 1000, NULL);
+    direction_send(table, len, FLOW_DIRECTION_ORIGINAL);
+    len = make_tcp_pkt(test_buffer, eth_protocol, TRUE, SYN_ACK, 6000, 2001, 1000, NULL);
+    direction_send(table, len, FLOW_DIRECTION_REPLY);
+    len = make_pkt(test_buffer, eth_protocol, IP_PROTOCOL_UDP);
+    flow = direction_send(table, len, FLOW_DIRECTION_ORIGINAL);
+    len = make_pkt_reverse(test_buffer, eth_protocol, IP_PROTOCOL_UDP);
+    direction_send(table, len, FLOW_DIRECTION_REPLY);
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+    inet_flow_table_free(table);
+    TEST_DPORT = _TEST_DPORT;
+}
+
 void test_packet_tcp(gconstpointer data)
 {
     guint16 eth_protocol = GPOINTER_TO_UINT(data);
@@ -4327,6 +4392,8 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/parse/ipv6/fragment", test_flow_parse_ipv6_fragment);
     g_test_add_func("/flow/table/free_fragments", test_flow_table_free_fragments);
     g_test_add_data_func("/flow/fragment/direction/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_fragment_direction);
+    g_test_add_data_func("/flow/direction/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_direction);
+    g_test_add_data_func("/flow/direction/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_direction);
     g_test_add_data_func("/flow/fragment/direction/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_fragment_direction);
     g_test_add_func("/clear/expired_frag_info", test_clear_expired_frag_info);
     g_test_add_func("/flow/expiry/queue", test_flow_expiry_queue);
