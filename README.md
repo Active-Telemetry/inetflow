@@ -146,7 +146,6 @@ typedef struct _InetTuple {
     guint16 dport;              /* Destination port, in network byte order */
     guint8 family;              /* AF_INET or AF_INET6 */
     guint8 protocol;            /* IP protocol */
-    guint16 offset;             /* Offset of the transport header in the frame */
     guint32 hash;               /* Set by inet_tuple_hash() and inet_flow_get(), or 0 */
 } InetTuple;
 ```
@@ -207,8 +206,8 @@ data for the flow.
 ```c
 typedef struct _InetFlow {
     InetTuple tuple;            /* The tuple of the first packet */
-    InetFlowState state;        /* FLOW_NEW, FLOW_OPEN or FLOW_CLOSED */
-    guint8 direction;           /* InetFlowDirection of the last packet */
+    InetFlowState state;        /* INET_FLOW_STATE_NEW, INET_FLOW_STATE_OPEN or INET_FLOW_STATE_CLOSED */
+    InetFlowDirection direction;        /* Of the last packet */
     guint64 timestamp;          /* Time of the last packet, in microseconds */
     guint64 packets;            /* Packets in both directions */
     guint64 inbytes;            /* Bytes in the reply direction */
@@ -242,13 +241,13 @@ stateDiagram-v2
 
 | State | Default timeout |
 |---|---|
-| `FLOW_NEW` | 30 s |
-| `FLOW_OPEN` | 300 s |
-| `FLOW_CLOSED` | 10 s |
+| `INET_FLOW_STATE_NEW` | 30 s |
+| `INET_FLOW_STATE_OPEN` | 300 s |
+| `INET_FLOW_STATE_CLOSED` | 10 s |
 
 A TCP flow opens on a SYN/ACK. A TCP flow first seen after its handshake, and
 a UDP flow, open when a packet is seen in the reply direction. Other protocols
-stay `FLOW_NEW`. A TCP flow closes on an RST, or when both ends have sent a
+stay `INET_FLOW_STATE_NEW`. A TCP flow closes on an RST, or when both ends have sent a
 FIN/ACK. After a FIN from one end the other end can still send data, so the
 flow stays open. A FIN without an ACK does not change the state. A SYN starts
 a new connection on the tuple.
@@ -257,8 +256,8 @@ a new connection on the tuple.
 callers that learn about the connection another way.
 
 A packet in the direction of the first packet of a flow is
-`FLOW_DIRECTION_ORIGINAL`, and a packet in the other direction is
-`FLOW_DIRECTION_REPLY`. A TCP SYN changes the original direction to the
+`INET_FLOW_DIRECTION_ORIGINAL`, and a packet in the other direction is
+`INET_FLOW_DIRECTION_REPLY`. A TCP SYN changes the original direction to the
 direction of the SYN. Packets are compared by address and port, so a flow with
 the same port at each end has two directions. `outbytes` counts the original
 direction and `inbytes` counts the reply direction, for all protocols.
@@ -277,7 +276,7 @@ typedef struct _InetPacket {
     const guint8 *l4;           /* Transport header, or NULL for non-first fragments */
     const guint8 *payload;      /* Transport payload for TCP, UDP and SCTP, or NULL */
     guint32 payload_length;     /* Bytes of payload, excluding link layer padding */
-    guint8 direction;           /* InetFlowDirection, set when the flow is updated */
+    InetFlowDirection direction;        /* Set when the flow is updated */
     gboolean fragment;          /* The packet is a fragment of a larger datagram */
     guint32 anomalies;          /* INET_ANOMALY_ flags for malformed headers */
     struct {
@@ -433,9 +432,8 @@ ports of 0, and only `FRAG_TOO_LARGE` is checked.
 #### Timestamps
 
 An entry uses the timestamp passed to `inet_flow_get()`, or the monotonic
-clock when the timestamp is 0. `inet_packet_parse()` has no timestamp, so its
-entries always use the monotonic clock. A program that replays a capture
-should use `inet_flow_get()` with the capture timestamps.
+clock when the timestamp is 0. `inet_packet_parse()` takes a timestamp in the
+same way. A program that replays a capture should pass the capture timestamps.
 
 #### Limitations
 
@@ -512,8 +510,9 @@ The first packet of a connection sets one of three starting states:
 A connection first seen after its handshake is not tracked, because its
 sequence numbers and window scale are unknown. A connection where only one
 direction of the handshake is seen moves to `ONE_SIDED`, and all of its
-later segments are invalid. This also happens when the client sends an ACK
-in `SYN_SENT`.
+later segments have the `INET_TCP_EVENT_ONE_SIDED` event. They are not
+invalid, because one-sided traffic is often asymmetric routing. This also
+happens when the client sends an ACK in `SYN_SENT`.
 
 A caller that rejects a segment before the lookup, for example for a bad
 checksum, leaves `INET_FLOW_TCP_TRACK` off for that segment. The segment then
@@ -556,6 +555,7 @@ linked flow, because the translation changes them.
 | `inet_flow_table_free(table)` | Free a table, its flows and its fragment list |
 | `inet_flow_table_size(table)` | The number of flows |
 | `inet_flow_table_max_set(table, max)` | Limit the number of flows. 0 means no limit. |
+| `inet_flow_table_stats(table, &stats)` | Fill in an `InetFlowTableStats`: `hits` counts the `inet_flow_get()` calls that found a flow, and `misses` those that created one. A program built with an older header gets the counters it knows about. |
 | `inet_flow_table_timeouts_set(table, new, open, closed)` | Set the flow timeouts in seconds |
 | `inet_flow_table_frag_limits_set(table, max, timeout)` | Set the fragment list limits |
 
@@ -572,7 +572,7 @@ linked flow, because the translation changes them.
 | `inet_flow_foreach(table, func, data)` | Call a function for each flow. The function can free the flow it is given, but must not free, create or update other flows. |
 | `inet_flow_free(flow)` | Free a flow, and its context if the table has a context free function |
 | `inet_flow_tcp_state(flow)` | The tracked TCP state of a flow |
-| `inet_flow_tcp_link(flow, linked, client, client_port)` | Share the TCP state of two flows |
+| `inet_flow_tcp_link(flow, linked, client, client_port)` | Share the TCP state of two flows. `client` and `client_port` are the client end in the tuple of `linked`, with the port in network byte order. |
 
 ### Flags
 
@@ -589,7 +589,7 @@ linked flow, because the translation changes them.
 
 | Function | Purpose |
 |---|---|
-| `inet_packet_parse(frame, length, flags, fragments, pkt)` | Parse a frame into an `InetPacket` without a flow table. `fragments` can be NULL. |
+| `inet_packet_parse(frame, length, timestamp, flags, fragments, pkt)` | Parse a frame into an `InetPacket` without a flow table. `fragments` can be NULL. The timestamp ages the fragment list, as for `inet_flow_get()`. |
 | `inet_frag_list_new(max, timeout)` | Create a fragment list for `inet_packet_parse()` |
 | `inet_frag_list_free(fragments)` | Free a fragment list |
 
@@ -671,8 +671,8 @@ follows.
 | The `iphr` output of `inet_flow_get_full()` | `pkt.l3` |
 | The tuple output of `inet_flow_get_full()` | `pkt.tuple`. Copy it to keep it. Remove the `free()`. |
 | `inet_flow_get(t, f, len)` | `inet_flow_get(t, f, len, 0, INET_FLOW_CREATE \| INET_FLOW_L2, NULL)` |
-| `inet_flow_parse(f, len, frags, &tuple, tunnel)` | `inet_packet_parse(f, len, INET_FLOW_L2 \| ..., frags, &pkt)`, then `pkt.tuple` |
-| `inet_flow_parse_ip(ip, len, frags, &tuple, tunnel)` | `inet_packet_parse(ip, len, ..., frags, &pkt)`, then `pkt.tuple` |
+| `inet_flow_parse(f, len, frags, &tuple, tunnel)` | `inet_packet_parse(f, len, 0, INET_FLOW_L2 \| ..., frags, &pkt)`, then `pkt.tuple` |
+| `inet_flow_parse_ip(ip, len, frags, &tuple, tunnel)` | `inet_packet_parse(ip, len, 0, ..., frags, &pkt)`, then `pkt.tuple` |
 | `inet_frag_list_new()` | `inet_frag_list_new(INET_FRAG_DEFAULT_MAX, INET_FRAG_DEFAULT_TIMEOUT)` |
 | `((struct sockaddr_in *) &t->src)->sin_addr` | `t->src.v4` |
 | `((struct sockaddr_in6 *) &t->src)->sin6_addr` | `t->src.v6` |
@@ -682,7 +682,12 @@ follows.
 | `inet_tuple_get_client(t)` or `inet_tuple_get_upper(t)` | `inet_tuple_client_addr(t)` and `inet_tuple_client_port(t)` |
 | A `sockaddr` for a C library call | `inet_tuple_to_sockaddr(t, TRUE, &ss)` |
 | Filling in `sockaddr` fields of a tuple | `inet_tuple_set()` |
-| `table->hits`, `table->misses`, `flow->hash`, `flow->lifetime` and other internal fields | Not available |
+| `FLOW_NEW`, `FLOW_OPEN`, `FLOW_CLOSED` | `INET_FLOW_STATE_NEW`, `INET_FLOW_STATE_OPEN`, `INET_FLOW_STATE_CLOSED` |
+| `FLOW_DIRECTION_UNKNOWN`, `FLOW_DIRECTION_ORIGINAL`, `FLOW_DIRECTION_REPLY` | `INET_FLOW_DIRECTION_UNKNOWN`, `INET_FLOW_DIRECTION_ORIGINAL`, `INET_FLOW_DIRECTION_REPLY` |
+| `frame + t->offset`, the header after the IP header | `pkt.l4`. It is after any IPv6 extension headers, and NULL for a later fragment, which has no such header. |
+| `frame + t->offset + 8`, the data after a UDP header, such as ESP in UDP | `pkt.payload` |
+| `table->hits`, `table->misses` | `inet_flow_table_stats(table, &stats)`, then `stats.hits` and `stats.misses` |
+| `flow->hash`, `flow->lifetime` and other internal fields | Not available |
 | A `NULL` return from `inet_flow_get_full()` | Check `pkt.status` for the reason |
 | `flow_context_unref(flow); inet_flow_unref(flow);` | `inet_flow_free(flow)`, with the context freed by the function set by `inet_flow_table_context_free_set()` |
 

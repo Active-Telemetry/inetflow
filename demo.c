@@ -261,7 +261,7 @@ static void print_flow(InetFlow * flow, gpointer data)
              g_ntohs(inet_tuple_server_port(&flow->tuple)),
              g_ntohs(inet_tuple_client_port(&flow->tuple)),
              flow->packets, flow->inbytes, flow->outbytes,
-             flow->state == FLOW_NEW ? "NEW   " : (flow->state == FLOW_OPEN ? "OPEN  " : "CLOSED"),
+             flow->state == INET_FLOW_STATE_NEW ? "NEW   " : (flow->state == INET_FLOW_STATE_OPEN ? "OPEN  " : "CLOSED"),
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
              dpi ? proto :
 #endif

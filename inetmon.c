@@ -140,7 +140,7 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     InetPacket pkt;
 
     frames++;
-    if (inet_packet_parse(frame, length, INET_FLOW_L2, NULL, &pkt)
+    if (inet_packet_parse(frame, length, 0, INET_FLOW_L2, NULL, &pkt)
         && (inet_tuple_family(&pkt.tuple) == AF_INET || inet_tuple_family(&pkt.tuple) == AF_INET6)) {
         update_host(&pkt.tuple, length);
         if (inet_tuple_family(&pkt.tuple) == AF_INET)

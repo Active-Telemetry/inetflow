@@ -105,9 +105,8 @@ struct _InetFlowTable {
     guint64 timeout_us[LIFETIME_COUNT];
     InetFragList *frag_info_list;
     GDestroyNotify context_free;
-    guint64 hits;
-    guint64 misses;
-    guint64 max;
+    InetFlowTableStats stats;
+    guint max;
 };
 
 /* Packet */
@@ -921,7 +920,6 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
     inet_tuple_set_protocol(f, iph->protocol);
     key = *f;
 
-    f->offset += hdr_len;
     /* Don't bother with this for non-first fragments */
     if ((GUINT16_FROM_BE(iph->frag_off) & 0x1FFF) == 0) {
         switch (iph->protocol) {
@@ -968,7 +966,6 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
      */
     if (GUINT16_FROM_BE(iph->frag_off) & 0x3FFF) {
         InetFragment entry = { 0 };
-        guint16 offset = f->offset;
         entry.id = iph->id;
         entry.tuple = key;
         entry.flow = *f;
@@ -986,7 +983,6 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
         *f = entry.flow;
-        f->offset = offset;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;
         return result;
@@ -1031,7 +1027,6 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
 
     data += sizeof(ip6_hdr_t);
     length -= sizeof(ip6_hdr_t);
-    f->offset += sizeof(ip6_hdr_t);
 
   next_header:
     DEBUG("Next Header: %u\n", inet_tuple_get_protocol(f));
@@ -1141,7 +1136,6 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
      */
     if (fragment_hdr) {
         InetFragment entry = { 0 };
-        guint16 offset = f->offset;
         entry.id = fragment_hdr->id;
         entry.tuple = key;
         entry.flow = *f;
@@ -1159,7 +1153,6 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
         gboolean result = frag_list_update(fragments, &entry, more_fragments);
         set_anomaly(pkt, entry.anomalies);
         *f = entry.flow;
-        f->offset = offset;
         if (!result)
             pkt->status = INET_PACKET_FRAG_UNTRACKED;
         return result;
@@ -1216,7 +1209,6 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
     e = (ethernet_hdr_t *) data;
     data += sizeof(ethernet_hdr_t);
     length -= sizeof(ethernet_hdr_t);
-    f->offset += sizeof(ethernet_hdr_t);
     type = GUINT16_FROM_BE(e->protocol);
   try_again:
     switch (type) {
@@ -1231,7 +1223,6 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
         type = GUINT16_FROM_BE(v->protocol);
         data += sizeof(vlan_hdr_t);
         length -= sizeof(vlan_hdr_t);
-        f->offset += sizeof(vlan_hdr_t);
         goto try_again;
     case ETH_PROTOCOL_MPLS_UC:
     case ETH_PROTOCOL_MPLS_MC:
@@ -1246,7 +1237,6 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
         bottom_of_stack = data[2] & 0x01;
         data += sizeof(guint32);
         length -= sizeof(guint32);
-        f->offset += sizeof(guint32);
         if (!bottom_of_stack)
             type = ETH_PROTOCOL_MPLS_UC;
         else
@@ -1271,7 +1261,6 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
         }
         data += sizeof(pppoe_sess_hdr_t);
         length -= sizeof(pppoe_sess_hdr_t);
-        f->offset += sizeof(pppoe_sess_hdr_t);
         goto try_again;
     default:
         DEBUG("Unsupported ethernet protocol: 0x%04x\n", type);
@@ -1675,7 +1664,9 @@ static gboolean tcp_update(InetFlow * flow, InetPacket * pkt)
     }
 
     pkt->tcp.events = events;
-    pkt->tcp.invalid = (events & ~valid_events) != 0;
+    /* One-sided traffic is often asymmetric routing, so it is reported but
+     * does not make a segment invalid */
+    pkt->tcp.invalid = (events & ~(valid_events | INET_TCP_EVENT_ONE_SIDED)) != 0;
     if (!pkt->tcp.invalid && tcp->state != INET_TCP_STATE_ONE_SIDED)
         tcp_peer_update(tcp, sender, pkt);
     return !pkt->tcp.invalid;
@@ -1690,6 +1681,8 @@ void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * cli
 {
     InetTcpFlow *tcp_flow;
 
+    if (!flow || !linked || !client)
+        return;
     if (!FLOW_PRIV(flow)->tcp)
         FLOW_PRIV(flow)->tcp = tcp_flow_new(NULL);
     tcp_flow = tcp_flow_new(FLOW_PRIV(flow)->tcp->state);
@@ -1711,13 +1704,14 @@ static void flow_state_set(InetFlowPriv * flow, InetFlowState state, int lifetim
  * direction until a TCP SYN is seen. The tuples are compared with their
  * addresses, so that a flow with the same port at each end has two
  * directions. */
-static guint8 flow_direction(InetFlowPriv * flow, InetFlowPriv * packet)
+static InetFlowDirection flow_direction(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    return inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple) != flow->reversed ? FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
+    return inet_tuple_exact(&packet->pub.tuple,
+                            &flow->pub.tuple) != flow->reversed ? INET_FLOW_DIRECTION_ORIGINAL : INET_FLOW_DIRECTION_REPLY;
 }
 
 /* The direction values are separate bits */
-#define BOTH_DIRECTIONS (FLOW_DIRECTION_ORIGINAL | FLOW_DIRECTION_REPLY)
+#define BOTH_DIRECTIONS (INET_FLOW_DIRECTION_ORIGINAL | INET_FLOW_DIRECTION_REPLY)
 
 /* Update the flow state and lifetime for a packet, and find its direction.
  * The lifetime is changed while the flow is out of the expiry queues. */
@@ -1739,26 +1733,26 @@ static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
         if (flags & TCP_ACK) {
             flow->fins |= packet->pub.direction;
             if (flow->fins == BOTH_DIRECTIONS)
-                flow_state_set(flow, FLOW_CLOSED, LIFETIME_CLOSED);
+                flow_state_set(flow, INET_FLOW_STATE_CLOSED, LIFETIME_CLOSED);
         }
     } else if (flags & TCP_SYN) {
         if (flags & TCP_ACK)
-            flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
+            flow_state_set(flow, INET_FLOW_STATE_OPEN, LIFETIME_OPEN);
         else
-            flow_state_set(flow, FLOW_NEW, LIFETIME_NEW);
+            flow_state_set(flow, INET_FLOW_STATE_NEW, LIFETIME_NEW);
     } else if (flags & TCP_RST) {
-        flow_state_set(flow, FLOW_CLOSED, LIFETIME_CLOSED);
-    } else if (flow->pub.state == FLOW_NEW && flow->pub.direction && packet->pub.direction != flow->pub.direction) {
+        flow_state_set(flow, INET_FLOW_STATE_CLOSED, LIFETIME_CLOSED);
+    } else if (flow->pub.state == INET_FLOW_STATE_NEW && flow->pub.direction && packet->pub.direction != flow->pub.direction) {
         /* A connection first seen after its handshake is open once both
          * ends have been seen */
-        flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
+        flow_state_set(flow, INET_FLOW_STATE_OPEN, LIFETIME_OPEN);
     }
 }
 
 static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     if (flow->pub.direction && packet->pub.direction && packet->pub.direction != flow->pub.direction)
-        flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
+        flow_state_set(flow, INET_FLOW_STATE_OPEN, LIFETIME_OPEN);
 }
 
 static void inet_flow_update(InetFlowPriv * flow, InetFlowPriv * packet)
@@ -1810,16 +1804,16 @@ static gboolean packet_parse(InetPacket * pkt, const guint8 * frame, guint lengt
     return parsed;
 }
 
-gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags, InetFragList * fragments, InetPacket * pkt)
+gboolean inet_packet_parse(const guint8 * frame, guint length, guint64 timestamp, guint32 flags, InetFragList * fragments, InetPacket * pkt)
 {
-    return packet_parse(pkt, frame, length, fragments, 0, flags);
+    return packet_parse(pkt, frame, length, fragments, timestamp, flags);
 }
 
 static void flow_count(InetFlowPriv * flow, InetFlowPriv * packet, guint length)
 {
-    if (packet->pub.direction == FLOW_DIRECTION_ORIGINAL)
+    if (packet->pub.direction == INET_FLOW_DIRECTION_ORIGINAL)
         flow->pub.outbytes += length;
-    else if (packet->pub.direction == FLOW_DIRECTION_REPLY)
+    else if (packet->pub.direction == INET_FLOW_DIRECTION_REPLY)
         flow->pub.inbytes += length;
     flow->pub.packets++;
 }
@@ -1875,7 +1869,7 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
             flow->pub.timestamp = timestamp ? : get_time_us();
             flow_count(flow, &packet, length);
         }
-        table->hits++;
+        table->stats.hits++;
     } else {
         if (!(flags & INET_FLOW_CREATE)) {
             pkt->status = INET_PACKET_NOT_FOUND;
@@ -1886,7 +1880,7 @@ InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint lengt
             pkt->status = INET_PACKET_TABLE_FULL;
             return NULL;
         }
-        table->misses++;
+        table->stats.misses++;
         inet_flow_update(flow, &packet);
         flow_count(flow, &packet, length);
     }
@@ -1948,9 +1942,17 @@ void inet_flow_table_context_free_set(InetFlowTable * table, GDestroyNotify cont
     table->context_free = context_free;
 }
 
-void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows)
+void inet_flow_table_max_set(InetFlowTable * table, guint max_flows)
 {
     table->max = max_flows;
+}
+
+void inet_flow_table_stats_get(InetFlowTable * table, InetFlowTableStats * stats, gsize size)
+{
+    /* Fill only the counters the caller's structure has room for, and zero
+     * any that this version does not have */
+    memset(stats, 0, size);
+    memcpy(stats, &table->stats, MIN(size, sizeof(table->stats)));
 }
 
 void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s, guint closed_s)
@@ -1988,12 +1990,12 @@ InetFlow *inet_flow_lookup(InetFlowTable * table, const InetTuple * tuple)
 
 void inet_flow_establish(InetFlowTable * table, InetFlow * flow)
 {
-    flow->state = FLOW_OPEN;
+    flow->state = INET_FLOW_STATE_OPEN;
     flow_lifetime_set(FLOW_PRIV(flow), LIFETIME_OPEN);
 }
 
 void inet_flow_close(InetFlowTable * table, InetFlow * flow)
 {
-    flow->state = FLOW_CLOSED;
+    flow->state = INET_FLOW_STATE_CLOSED;
     flow_lifetime_set(FLOW_PRIV(flow), LIFETIME_CLOSED);
 }

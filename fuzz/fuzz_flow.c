@@ -46,7 +46,7 @@ int LLVMFuzzerTestOneInput(const guint8 * data, size_t size)
     now += 1000;
 
     inet_flow_get(table, data + 1, size - 1, now, flags | INET_FLOW_CREATE | INET_FLOW_UPDATE, &pkt);
-    inet_packet_parse(data + 1, size - 1, flags, fragments, &pkt);
+    inet_packet_parse(data + 1, size - 1, now, flags, fragments, &pkt);
     while ((flow = inet_flow_expire(table, now)))
         inet_flow_free(flow);
     return 0;

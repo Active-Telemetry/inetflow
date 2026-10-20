@@ -22,16 +22,16 @@
 
 /* Flow states */
 typedef enum {
-    FLOW_NEW,
-    FLOW_OPEN,
-    FLOW_CLOSED,
+    INET_FLOW_STATE_NEW,
+    INET_FLOW_STATE_OPEN,
+    INET_FLOW_STATE_CLOSED,
 } InetFlowState;
 
 /* Flow Directions */
 typedef enum {
-    FLOW_DIRECTION_UNKNOWN,
-    FLOW_DIRECTION_ORIGINAL,
-    FLOW_DIRECTION_REPLY,
+    INET_FLOW_DIRECTION_UNKNOWN,
+    INET_FLOW_DIRECTION_ORIGINAL,
+    INET_FLOW_DIRECTION_REPLY,
 } InetFlowDirection;
 
 /* Default timeouts */
@@ -53,7 +53,6 @@ typedef struct _InetTuple {
     guint16 dport;              /* Network byte order */
     guint8 family;              /* AF_INET or AF_INET6 */
     guint8 protocol;
-    guint16 offset;             /* Offset of the transport header in the frame */
     guint32 hash;
 } InetTuple;
 
@@ -87,7 +86,7 @@ void inet_frag_list_free(InetFragList * fragments);
 typedef struct _InetFlow {
     InetTuple tuple;            /* The tuple of the first packet */
     InetFlowState state;
-    guint8 direction;           /* InetFlowDirection of the last packet */
+    InetFlowDirection direction;        /* Of the last packet */
     guint64 timestamp;          /* Time of the last packet */
     guint64 packets;
     guint64 inbytes;            /* Reply direction */
@@ -189,7 +188,7 @@ typedef struct _InetPacket {
     const guint8 *l4;           /* Transport header, or NULL for non-first fragments */
     const guint8 *payload;      /* Transport payload for TCP, UDP and SCTP, or NULL */
     guint32 payload_length;     /* Bytes of payload, excluding link layer padding */
-    guint8 direction;           /* InetFlowDirection, set when the flow is updated */
+    InetFlowDirection direction;        /* Set when the flow is updated */
     gboolean fragment;          /* The packet is a fragment of a larger datagram */
     guint32 anomalies;          /* INET_ANOMALY_ flags for malformed headers */
     struct {
@@ -213,12 +212,25 @@ typedef struct _InetFlowTable InetFlowTable;
 InetFlowTable *inet_flow_table_new(void);
 void inet_flow_table_free(InetFlowTable * table);
 guint inet_flow_table_size(InetFlowTable * table);
+/* Counters of a flow table. New counters are added at the end. */
+typedef struct _InetFlowTableStats {
+    guint64 hits;               /* inet_flow_get() calls that found a flow */
+    guint64 misses;             /* inet_flow_get() calls that created a flow */
+} InetFlowTableStats;
+
+/* Fill in the counters. The size of the caller's structure is passed, so a
+ * program built with an older header gets the counters it knows about. */
+void inet_flow_table_stats_get(InetFlowTable * table, InetFlowTableStats * stats, gsize size);
+#define inet_flow_table_stats(table, stats) inet_flow_table_stats_get((table), (stats), sizeof(*(stats)))
 void inet_flow_table_context_free_set(InetFlowTable * table, GDestroyNotify context_free);
-void inet_flow_table_max_set(InetFlowTable * table, guint64 max_flows);
+void inet_flow_table_max_set(InetFlowTable * table, guint max_flows);
 void inet_flow_table_timeouts_set(InetFlowTable * table, guint new_s, guint open_s, guint closed_s);
 void inet_flow_table_frag_limits_set(InetFlowTable * table, guint max_datagrams, guint timeout_s);
 
-gboolean inet_packet_parse(const guint8 * frame, guint length, guint32 flags, InetFragList * fragments, InetPacket * pkt);
+/* The timestamp, in microseconds, ages the fragment list. A timestamp of 0
+ * reads the monotonic clock. */
+gboolean inet_packet_parse(const guint8 * frame, guint length, guint64 timestamp, guint32 flags, InetFragList * fragments,
+                           InetPacket * pkt);
 InetFlow *inet_flow_get(InetFlowTable * table, const guint8 * frame, guint length, guint64 timestamp, guint32 flags, InetPacket * pkt);
 InetFlow *inet_flow_lookup(InetFlowTable * table, const InetTuple * tuple);
 InetFlow *inet_flow_create(InetFlowTable * table, const InetTuple * tuple, guint64 timestamp);
@@ -229,6 +241,8 @@ typedef void (*IFFunc) (InetFlow * flow, gpointer user_data);
 void inet_flow_foreach(InetFlowTable * table, IFFunc func, gpointer user_data);
 
 InetTcpConnState inet_flow_tcp_state(InetFlow * flow);
+/* client and client_port are the client end as it appears in the tuple of
+ * linked, with the port in network byte order */
 void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * client, guint16 client_port);
 
 #endif                          /* __INET_FLOW_H__ */
