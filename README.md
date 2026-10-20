@@ -17,6 +17,7 @@ The library uses GLib and has no other runtime dependencies.
 - [Threads](#threads)
 - [The v1 API](#the-v1-api)
 - [Porting from v1 to v2](#porting-from-v1-to-v2)
+- [Licence](#licence)
 - [Development](#development)
 - [Demo programs](#demo-programs)
 
@@ -699,6 +700,13 @@ Notes:
   past that length no longer parse.
 - A fragmented datagram is tracked until all of its data has arrived, instead
   of until the fragment with the MF flag clear arrives.
+
+## Licence
+
+The library, its tests and `demo` are under the GNU Lesser General Public
+License, version 3 or later, in `LICENSE`. `inetmon` and its InfluxDB client
+in `ic.c` are under the GNU General Public License, version 3 or later, in
+`COPYING`. The LGPL adds terms to the GPL, so both texts apply to the library.
 
 ## Development
 
