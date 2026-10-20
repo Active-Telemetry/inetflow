@@ -916,6 +916,22 @@ static gboolean flow_parse_ipv4(InetPacket * pkt, const guint8 * data, guint32 l
             if (!flow_parse_udp(pkt, data + hdr_len, length - hdr_len))
                 return FALSE;
             break;
+        case IP_PROTOCOL_SCTP:
+            if (!flow_parse_sctp(pkt, data + hdr_len, length - hdr_len))
+                return FALSE;
+            break;
+        case IP_PROTOCOL_IPV4:
+            if (flags & INET_FLOW_TUNNEL) {
+                if (!flow_parse_ipv4(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags, depth + 1))
+                    return FALSE;
+            }
+            break;
+        case IP_PROTOCOL_IPV6:
+            if (flags & INET_FLOW_TUNNEL) {
+                if (!flow_parse_ipv6(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags, depth + 1))
+                    return FALSE;
+            }
+            break;
         case IP_PROTOCOL_GRE:
             if (flags & INET_FLOW_TUNNEL) {
                 if (!flow_parse_gre(pkt, data + hdr_len, length - hdr_len, fragments, ts, flags, depth))

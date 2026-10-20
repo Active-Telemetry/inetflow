@@ -370,6 +370,9 @@ static guint8 *build_hdr_after_ip(guint8 * buffer, guint ip_protocol, gboolean r
     case IP_PROTOCOL_UDP:
         p = build_hdr_udp(p, reverse);
         break;
+    case IP_PROTOCOL_SCTP:
+        p = build_hdr_sctp(p, reverse);
+        break;
     case IP_PROTOCOL_ICMP:
     case IP_PROTOCOL_ICMPV6:
         p = build_hdr_icmp(p, reverse);
@@ -856,10 +859,21 @@ void test_flow_parse_unsupported_transport_protocols()
     /* IL */
     len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, 40);
     g_assert(parse_tuple(test_tuple, test_buffer, len, FALSE));
+}
 
-    /* IPv4 SCTP */
+void test_flow_parse_sctp_ipv4()
+{
+    guint len;
+
+    setup_test();
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_SCTP);
     g_assert(parse_tuple(test_tuple, test_buffer, len, FALSE));
+    g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, IP_PROTOCOL_SCTP);
+    g_assert_cmpuint(inet_tuple_get_src_port(test_tuple), ==, TEST_SPORT);
+    g_assert_cmpuint(inet_tuple_get_dst_port(test_tuple), ==, TEST_DPORT);
+
+    /* The frame ends inside the SCTP header */
+    g_assert_false(parse_tuple(test_tuple, test_buffer, len - 1, FALSE));
 }
 
 void test_flow_parse_unsupported_ppp_protocols()
@@ -2238,6 +2252,46 @@ static guint make_pkt_in_ipv6(guint8 * buffer, guint inner_ip_protocol)
         p = build_hdr_ipv6(p, IP_PROTOCOL_UDP, FALSE);
     p = build_hdr_udp(p, FALSE);
     return (guint) (p - buffer);
+}
+
+static guint make_pkt_in_ipv4(guint8 * buffer, guint inner_ip_protocol)
+{
+    guint8 *p = build_hdr_eth(buffer, ETH_PROTOCOL_IP);
+    p = build_hdr_ipv4(p, inner_ip_protocol, FALSE);
+    if (inner_ip_protocol == IP_PROTOCOL_IPV4)
+        p = build_hdr_ipv4(p, IP_PROTOCOL_UDP, FALSE);
+    else
+        p = build_hdr_ipv6(p, IP_PROTOCOL_UDP, FALSE);
+    p = build_hdr_udp(p, FALSE);
+    return (guint) (p - buffer);
+}
+
+void test_flow_parse_ip_in_ipv4()
+{
+    guint inner[] = { IP_PROTOCOL_IPV4, IP_PROTOCOL_IPV6 };
+    guint len;
+    int i;
+
+    for (i = 0; i < G_N_ELEMENTS(inner); i++) {
+        setup_test();
+        len = make_pkt_in_ipv4(test_buffer, inner[i]);
+
+        /* With tunnel inspection the tuple is the inner packet */
+        g_assert(parse_tuple(test_tuple, test_buffer, len, TRUE));
+        g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, IP_PROTOCOL_UDP);
+        g_assert_cmpuint(inet_tuple_family(test_tuple), ==, inner[i] == IP_PROTOCOL_IPV4 ? AF_INET : AF_INET6);
+        g_assert_cmpuint(inet_tuple_get_dst_port(test_tuple), ==, htons(TEST_DPORT));
+
+        /* The inner packet ends inside its transport header */
+        g_assert_false(parse_tuple(test_tuple, test_buffer, len - 4, TRUE));
+
+        /* Without tunnel inspection the tuple is the outer packet */
+        memset(test_tuple, 0, sizeof(*test_tuple));
+        g_assert(parse_tuple(test_tuple, test_buffer, len, FALSE));
+        g_assert_cmpuint(inet_tuple_family(test_tuple), ==, AF_INET);
+        g_assert_cmpuint(inet_tuple_get_protocol(test_tuple), ==, inner[i]);
+        g_assert_cmpuint(inet_tuple_get_dst_port(test_tuple), ==, 0);
+    }
 }
 
 void test_flow_parse_ip_in_ipv6()
@@ -4258,6 +4312,8 @@ int main(int argc, char *argv[])
     g_test_add_func("/tuple/exact", test_tuple_exact);
     g_test_add_func("/flow/parse/gre/options", test_flow_parse_gre_options);
     g_test_add_func("/flow/parse/ip_in_ipv6", test_flow_parse_ip_in_ipv6);
+    g_test_add_func("/flow/parse/ip_in_ipv4", test_flow_parse_ip_in_ipv4);
+    g_test_add_func("/flow/parse/sctp/ipv4", test_flow_parse_sctp_ipv4);
     g_test_add_func("/flow/parse/tunnel_depth", test_flow_parse_tunnel_depth);
     g_test_add_func("/flow/parse/tunnel_depth/gre", test_flow_parse_tunnel_depth_gre);
     g_test_add_func("/packet/parse", test_packet_parse);

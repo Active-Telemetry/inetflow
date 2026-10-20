@@ -24,7 +24,8 @@ The library uses GLib and has no other runtime dependencies.
 
 - Parses Ethernet, 802.1Q and 802.1ad VLAN tags, MPLS labels, PPPoE, IPv4,
   IPv6 extension headers, TCP, UDP and SCTP.
-- Optionally parses into GRE, IP in IP and IP in IPv6 tunnels.
+- Optionally parses into GRE tunnels, and into IPv4 or IPv6 packets carried in
+  IPv4 or IPv6.
 - Matches both directions of a connection to one flow.
 - Gives non-first IP fragments the ports of the first fragment.
 - Expires flows with separate timeouts for new, open and closed flows.
