@@ -216,6 +216,10 @@ typedef struct _InetFlow {
 } InetFlow;
 ```
 
+`inet_flow_get()` adds the `length` it is given to `outbytes` or `inbytes`,
+so the counters include the Ethernet header and any link layer padding of each
+frame. `packets` counts every frame of the flow.
+
 Each flow state has its own timeout. `inet_flow_table_timeouts_set()` changes
 the timeouts of a table.
 
@@ -300,12 +304,18 @@ The status says why a lookup returned NULL:
 ```c
 typedef enum {
     INET_PACKET_OK,
-    INET_PACKET_PARSE_ERROR,    /* The frame could not be parsed, see anomalies */
+    INET_PACKET_PARSE_ERROR,    /* The frame could not be parsed */
     INET_PACKET_NOT_FOUND,      /* No flow, and INET_FLOW_CREATE was not set */
     INET_PACKET_TABLE_FULL,     /* No flow, and the table is full */
     INET_PACKET_FRAG_UNTRACKED, /* The fragment list is full */
 } InetPacketStatus;
 ```
+
+For `INET_PACKET_PARSE_ERROR`, `anomalies` says why when an IP, TCP or UDP
+header is malformed. Some frames fail to parse without an anomaly: a frame
+shorter than an Ethernet header, an EtherType or PPP protocol that is not IP,
+more than two VLAN tags or three MPLS labels, and a VLAN, MPLS, PPPoE, GRE or
+SCTP header that is cut short.
 
 ### Header anomalies
 
@@ -555,10 +565,10 @@ linked flow, because the translation changes them.
 | `inet_flow_get(table, frame, length, timestamp, flags, pkt)` | Parse a frame and find, create or update its flow. `pkt` can be NULL. |
 | `inet_flow_lookup(table, tuple)` | Find the flow of a tuple |
 | `inet_flow_create(table, tuple, timestamp)` | Create a flow for a tuple. Returns NULL if the flow exists or the table is full. |
-| `inet_flow_expire(table, timestamp)` | Return a flow that has expired, or NULL. The caller frees it. |
+| `inet_flow_expire(table, timestamp)` | Return a flow that has expired, or NULL. The flow stays in the table, so the next call returns it again until the caller frees it. |
 | `inet_flow_establish(table, flow)` | Set a flow open |
 | `inet_flow_close(table, flow)` | Set a flow closed |
-| `inet_flow_foreach(table, func, data)` | Call a function for each flow |
+| `inet_flow_foreach(table, func, data)` | Call a function for each flow. The function can free the flow it is given, but must not free, create or update other flows. |
 | `inet_flow_free(flow)` | Free a flow, and its context if the table has a context free function |
 | `inet_flow_tcp_state(flow)` | The tracked TCP state of a flow |
 | `inet_flow_tcp_link(flow, linked, client, client_port)` | Share the TCP state of two flows |

@@ -1302,6 +1302,41 @@ static void flow_check_protocol(InetFlow * flow, gpointer data)
     g_assert_nonnull(inet_tuple_server_addr(&flow->tuple));
 }
 
+static void free_flow(InetFlow * flow, gpointer data)
+{
+    (*(guint *) data)++;
+    inet_flow_free(flow);
+}
+
+/* The callback can free the flow it is given, in each expiry queue */
+void test_flow_foreach_free()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+    guint calls = 0;
+    guint len;
+    int i;
+
+    setup_test();
+    inet_flow_table_context_free_set(table, g_free);
+    for (i = 0; i < 3; i++) {
+        TEST_SPORT = 2000 + i;
+        len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+        g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
+        flow->context = g_strdup("context");
+        if (i == 1)
+            inet_flow_establish(table, flow);
+        else if (i == 2)
+            inet_flow_close(table, flow);
+    }
+    TEST_SPORT = _TEST_SPORT;
+    inet_flow_foreach(table, free_flow, &calls);
+    g_assert_cmpuint(calls, ==, 3);
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 0);
+    g_assert_null(inet_flow_expire(table, G_MAXUINT64));
+    inet_flow_table_free(table);
+}
+
 void test_flow_foreach()
 {
     InetFlowTable *table;
@@ -4566,6 +4601,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/properties/ipv6/reversed", test_flow_properties_ipv6_reversed);
     g_test_add_func("/flow/properties/table", test_flow_table_properties);
     g_test_add_func("/flow/foreach", test_flow_foreach);
+    g_test_add_func("/flow/foreach/free", test_flow_foreach_free);
     g_test_add_func("/flow/create", test_flow_create);
     g_test_add_func("/flow/create/many", test_flow_create_many);
     g_test_add_func("/flow/table/size", test_flow_table_size);
