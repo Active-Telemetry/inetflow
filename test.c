@@ -2375,6 +2375,37 @@ void test_flow_create_lookup()
     inet_flow_table_free(table);
 }
 
+void test_flow_create_existing()
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetTuple tuple = { 0 };
+    InetTuple reversed;
+    InetFlow *flow;
+    guint len;
+
+    setup_test();
+    inet_flow_table_context_free_set(table, g_free);
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
+    g_assert_true(parse_tuple(&tuple, test_buffer, len, FALSE));
+    g_assert_nonnull((flow = inet_flow_create(table, &tuple, 1000)));
+    flow->context = g_strdup("context");
+
+    /* Creating the flow again, in either direction, fails and leaves the existing flow unchanged */
+    g_assert_null(inet_flow_create(table, &tuple, 2000));
+    reversed = tuple;
+    reversed.src = tuple.dst;
+    reversed.dst = tuple.src;
+    reversed.sport = tuple.dport;
+    reversed.dport = tuple.sport;
+    reversed.hash = 0;
+    g_assert_null(inet_flow_create(table, &reversed, 3000));
+    g_assert_cmpuint(inet_flow_table_size(table), ==, 1);
+    g_assert(inet_flow_lookup(table, &tuple) == flow);
+    g_assert_cmpuint(flow->timestamp, ==, 1000);
+    g_assert_cmpstr(flow->context, ==, "context");
+    inet_flow_table_free(table);
+}
+
 void test_flow_establish_close()
 {
     InetFlowTable *table = inet_flow_table_new();
@@ -3725,13 +3756,21 @@ void test_table_context_free()
     inet_flow_free(flow);
     g_assert_cmpint(contexts_freed, ==, 1);
 
-    /* Freeing the table frees the contexts of its flows */
+    /* Freeing the table frees its flows and their contexts, in each state */
     g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     flow->context = "context";
     len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
+    flow->context = "context";
+    inet_flow_establish(table, flow);
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_ICMP);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
+    flow->context = "context";
+    inet_flow_close(table, flow);
+    len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_UDP);
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL));
     inet_flow_table_free(table);
-    g_assert_cmpint(contexts_freed, ==, 2);
+    g_assert_cmpint(contexts_freed, ==, 4);
 
     /* Without a context free function the caller frees the contexts */
     table = inet_flow_table_new();
@@ -3740,7 +3779,7 @@ void test_table_context_free()
     g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
     flow->context = "context";
     inet_flow_table_free(table);
-    g_assert_cmpint(contexts_freed, ==, 2);
+    g_assert_cmpint(contexts_freed, ==, 4);
 }
 
 void test_table_timeouts()
@@ -3896,6 +3935,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/packet/tuple", test_packet_tuple);
     g_test_add_func("/flow/get/parse_fail", test_flow_get_full_parse_fail);
     g_test_add_func("/flow/create_lookup", test_flow_create_lookup);
+    g_test_add_func("/flow/create/existing", test_flow_create_existing);
     g_test_add_func("/flow/establish_close", test_flow_establish_close);
     g_test_add_data_func("/flow/fragment/limit/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_fragment_limit);
     g_test_add_data_func("/flow/fragment/limit/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_fragment_limit);

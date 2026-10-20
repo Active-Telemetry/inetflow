@@ -1640,7 +1640,17 @@ static InetFlowPriv *flow_new(InetFlowTable * table, const InetTuple * tuple, gu
     flow->lifetime = LIFETIME_NEW;
     flow->pub.tuple = *tuple;
     flow->pub.timestamp = timestamp ? : get_time_us();
-    g_hash_table_replace(table->table, flow, flow);
+    if (!g_hash_table_insert(table->table, flow, flow)) {
+        gpointer existing;
+
+        /* The tuple has a flow. The hash table has no destroy functions,
+         * so the insert freed nothing, but it kept the existing flow as the
+         * key and made the new flow the value. Put the existing flow back. */
+        g_hash_table_lookup_extended(table->table, flow, &existing, NULL);
+        g_hash_table_insert(table->table, existing, existing);
+        g_free(flow);
+        return NULL;
+    }
     insert_flow_by_expiry(flow);
     return flow;
 }
@@ -1697,7 +1707,11 @@ void inet_flow_table_free(InetFlowTable * table)
 {
     int i;
 
-    g_hash_table_remove_all(table->table);
+    /* Every flow is in one expiry queue */
+    for (i = 0; i < LIFETIME_COUNT; i++) {
+        while (!g_queue_is_empty(table->expire_queue[i]))
+            inet_flow_free(g_queue_peek_head(table->expire_queue[i]));
+    }
     g_hash_table_destroy(table->table);
     inet_frag_list_free(table->frag_info_list);
     for (i = 0; i < LIFETIME_COUNT; i++) {
@@ -1711,7 +1725,9 @@ InetFlowTable *inet_flow_table_new(void)
     InetFlowTable *table = g_malloc0(sizeof(InetFlowTable));
     int i;
 
-    table->table = g_hash_table_new_full((GHashFunc) flow_hash, (GEqualFunc) flow_compare, NULL, (GDestroyNotify) inet_flow_free);
+    /* The table frees its flows itself. A destroy function would free an
+     * existing flow when a flow with the same tuple is inserted. */
+    table->table = g_hash_table_new((GHashFunc) flow_hash, (GEqualFunc) flow_compare);
     table->frag_info_list = inet_frag_list_new(INET_FRAG_DEFAULT_MAX, INET_FRAG_DEFAULT_TIMEOUT);
     for (i = 0; i < LIFETIME_COUNT; i++) {
         table->expire_queue[i] = g_queue_new();

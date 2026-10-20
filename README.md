@@ -402,7 +402,7 @@ linked flow, because the translation changes them.
 |---|---|
 | `inet_flow_get(table, frame, length, timestamp, flags, pkt)` | Parse a frame and find, create or update its flow. `pkt` can be NULL. |
 | `inet_flow_lookup(table, tuple)` | Find the flow of a tuple |
-| `inet_flow_create(table, tuple, timestamp)` | Create a flow for a tuple |
+| `inet_flow_create(table, tuple, timestamp)` | Create a flow for a tuple. Returns NULL if the flow exists or the table is full. |
 | `inet_flow_expire(table, timestamp)` | Return a flow that has expired, or NULL. The caller frees it. |
 | `inet_flow_establish(table, flow)` | Set a flow open |
 | `inet_flow_close(table, flow)` | Set a flow closed |
