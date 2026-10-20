@@ -5,6 +5,8 @@ libinetflow.so
 inetflow.pc
 gcov
 *.gcno
+*.gcda
+coverage.info
 unittest
 unittest-asan
 demo

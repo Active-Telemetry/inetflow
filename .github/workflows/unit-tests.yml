@@ -54,14 +54,13 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libglib2.0-dev
+          sudo apt-get install -y autoconf automake libtool pkg-config \
+            libglib2.0-dev libncurses-dev
 
-      - name: Build
-        run: >-
-          gcc -g -O1 -fno-omit-frame-pointer
-          -fsanitize=address,undefined -fno-sanitize-recover=all
-          $(pkg-config --cflags glib-2.0) -I. test.c -o unittest-asan
-          $(pkg-config --libs glib-2.0)
+      - name: Configure
+        run: |
+          ./autogen.sh
+          ./configure
 
       - name: Run unit tests
-        run: G_SLICE=always-malloc ASAN_OPTIONS=detect_leaks=1 ./unittest-asan
+        run: make test-asan

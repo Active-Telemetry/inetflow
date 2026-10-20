@@ -35,10 +35,22 @@ unittest_SOURCES = test.c
 unittest_CFLAGS = $(libinetflow_la_CFLAGS) -g -fno-inline -fprofile-arcs -ftest-coverage
 unittest_LDADD = $(libinetflow_la_LIBADD)
 
-test: unittest
+# The unit tests built with AddressSanitizer and UndefinedBehaviorSanitizer,
+# which report unaligned and out of bounds reads that valgrind does not
+CLEANFILES = unittest-asan
+
+unittest-asan: test.c inetflow.c inetflow.h
+	$(CC) -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+		$(GLIB_CFLAGS) -I$(srcdir) $(srcdir)/test.c -o $@ $(GLIB_LIBS)
+
+test-asan: unittest-asan
+	@echo "Running unit tests with sanitizers"
+	$(Q)G_SLICE=always-malloc ASAN_OPTIONS=detect_leaks=1 ./unittest-asan
+
+test: unittest test-asan
 	@echo "Running unit tests"
 	$(Q)mkdir -p gcov
-	$(Q)G_SLICE=always-malloc VALGRIND_OPTS=--suppressions=valgrind.supp valgrind --leak-check=full ./unittest 2>&1
+	$(Q)G_SLICE=always-malloc VALGRIND_OPTS=--suppressions=valgrind.supp valgrind --leak-check=full --error-exitcode=1 ./unittest 2>&1
 	$(Q)lcov -q --capture --directory . --output-file coverage.info
 	$(Q)genhtml -q coverage.info --output-directory gcov
 

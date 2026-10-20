@@ -691,11 +691,17 @@ make test
 xdg-open gcov/index.html
 ```
 
-`make test` builds the unit tests in `test.c`, runs them under valgrind and
-writes a coverage report to `gcov/`. The tests include `inetflow.c`, so they
-can check internal state. The GitHub workflow in `.github/workflows` runs the
-unit tests under valgrind on each push and pull request, and fails on memory
-errors or leaks. It can also be started by hand.
+`make test` builds the unit tests in `test.c` and runs them twice. The first
+run uses a build with AddressSanitizer and UndefinedBehaviorSanitizer, which
+report unaligned and out of bounds reads that valgrind does not. The second
+run uses valgrind and writes a coverage report to `gcov/`. `make test-asan`
+runs only the sanitizer build. The sanitizers need a compiler that supports
+`-fsanitize=address,undefined`, such as GCC or clang on Linux.
+
+The tests include `inetflow.c`, so they can check internal state. The GitHub
+workflow in `.github/workflows` runs both builds on each push and pull
+request, and fails on memory errors, leaks or undefined behaviour. It can also
+be started by hand.
 
 ## Demo programs
 
