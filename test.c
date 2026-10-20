@@ -534,16 +534,23 @@ static guint make_pkt_vlan_Q_AD(guint8 * buffer, guint16 eth_protocol, guint ip_
     return (guint) (p - buffer);
 }
 
+static guint8 *build_hdr_mpls(guint8 * buffer, guint32 label, gboolean bottom_of_stack)
+{
+    guint32 word = g_htonl((label << 20) | (bottom_of_stack ? 0x1FF : 0xFF));
+
+    /* The label follows the Ethernet header, so it is not 4-byte aligned */
+    memcpy(buffer, &word, sizeof(word));
+    return buffer + sizeof(word);
+}
+
 static guint make_pkt_mpls(guint8 * buffer, guint32 label, guint16 eth_protocol, guint ip_protocol, int count)
 {
     guint8 *p = build_hdr_eth(buffer, ETH_PROTOCOL_MPLS_UC);
     while (count > 1) {
-        *((guint32 *) p) = g_htonl(((label << 20) | 0xFF));
-        p += sizeof(guint32);
+        p = build_hdr_mpls(p, label, FALSE);
         count--;
     };
-    *((guint32 *) p) = g_htonl(((label << 20) | 0x1FF));
-    p += sizeof(guint32);
+    p = build_hdr_mpls(p, label, TRUE);
     p = build_hdr_ip(p, eth_protocol, ip_protocol, FALSE);
     p = build_hdr_after_ip(p, ip_protocol, FALSE);
     return (guint) (p - buffer);
@@ -725,6 +732,30 @@ void test_flow_parse_mpls()
 
     len = make_pkt_mpls(test_buffer, 0x4, ETH_PROTOCOL_IPV6, IP_PROTOCOL_ICMPV6, 2);
     g_assert(parse_tuple(test_tuple, test_buffer, len, FALSE));
+}
+
+/* Parse MPLS stacks at every alignment of the frame, so that a sanitizer
+ * build reports any unaligned read of a label */
+void test_flow_parse_mpls_alignment()
+{
+    static guint64 storage[MAX_BUFFER_SIZE / sizeof(guint64) + 1];
+    guint8 *aligned = (guint8 *) storage;
+    InetPacket pkt;
+    guint len, shift;
+    int count;
+
+    setup_test();
+    for (count = 1; count <= 3; count++) {
+        len = make_pkt_mpls(test_buffer, count, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP, count);
+        for (shift = 0; shift < sizeof(guint32); shift++) {
+            memcpy(aligned + shift, test_buffer, len);
+            g_assert_true(inet_packet_parse(aligned + shift, len, INET_FLOW_L2, NULL, &pkt));
+            g_assert_cmpuint(pkt.tuple.family, ==, AF_INET);
+            g_assert_cmpuint(pkt.tuple.protocol, ==, IP_PROTOCOL_UDP);
+            g_assert_cmpuint(pkt.tuple.dport, ==, htons(TEST_DPORT));
+            g_assert(pkt.l3 == aligned + shift + sizeof(ethernet_hdr_t) + count * sizeof(guint32));
+        }
+    }
 }
 
 void test_flow_parse_ipv6_ext()
@@ -4427,6 +4458,7 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/parse/pppoe", test_flow_parse_pppoe);
     g_test_add_func("/flow/parse/vlan", test_flow_parse_vlan);
     g_test_add_func("/flow/parse/mpls", test_flow_parse_mpls);
+    g_test_add_func("/flow/parse/mpls/alignment", test_flow_parse_mpls_alignment);
     g_test_add_func("/flow/parse/ipv6/ext", test_flow_parse_ipv6_ext);
     g_test_add_func("/flow/parse/gre", test_flow_parse_gre);
     g_test_add_func("/flow/parse/gre/no_tunnel_inspection", test_flow_parse_gre_no_tunnel_inspection);

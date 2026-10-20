@@ -1195,7 +1195,7 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
     ethernet_hdr_t *e;
     vlan_hdr_t *v;
     pppoe_sess_hdr_t *pppoe;
-    guint32 label;
+    gboolean bottom_of_stack;
     int labels = 0;
     guint16 type;
     int tags = 0;
@@ -1237,11 +1237,14 @@ static gboolean flow_parse(InetPacket * pkt, const guint8 * data, guint32 length
             return FALSE;
         if (length < sizeof(guint32))
             return FALSE;
-        label = GUINT32_FROM_BE(*((guint32 *) data));
+        /* The bottom of stack bit is the low bit of the third byte. Reading
+         * the byte avoids a 32-bit load, which is unaligned after the
+         * Ethernet header. */
+        bottom_of_stack = data[2] & 0x01;
         data += sizeof(guint32);
         length -= sizeof(guint32);
         f->offset += sizeof(guint32);
-        if ((label & 0x100) != 0x100)
+        if (!bottom_of_stack)
             type = ETH_PROTOCOL_MPLS_UC;
         else
             type = ETH_PROTOCOL_IP;
