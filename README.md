@@ -224,9 +224,9 @@ the timeouts of a table.
 stateDiagram-v2
     direction LR
     [*] --> NEW
-    NEW --> OPEN: SYN/ACK, or UDP reply
-    NEW --> CLOSED: RST, or FIN/ACK
-    OPEN --> CLOSED: RST, or FIN/ACK
+    NEW --> OPEN: SYN/ACK, or a reply
+    NEW --> CLOSED: RST, or FIN/ACK from both ends
+    OPEN --> CLOSED: RST, or FIN/ACK from both ends
     classDef new fill:#fff3e0,stroke:#fb8c00,stroke-width:2px,color:#4a2a00
     classDef open fill:#e8f5e9,stroke:#43a047,stroke-width:2px,color:#123d17
     classDef closed fill:#ffebee,stroke:#e53935,stroke-width:2px,color:#4a0d0d
@@ -240,6 +240,13 @@ stateDiagram-v2
 | `FLOW_NEW` | 30 s |
 | `FLOW_OPEN` | 300 s |
 | `FLOW_CLOSED` | 10 s |
+
+A TCP flow opens on a SYN/ACK. A TCP flow first seen after its handshake, and
+a UDP flow, open when a packet is seen in the reply direction. Other protocols
+stay `FLOW_NEW`. A TCP flow closes on an RST, or when both ends have sent a
+FIN/ACK. After a FIN from one end the other end can still send data, so the
+flow stays open. A FIN without an ACK does not change the state. A SYN starts
+a new connection on the tuple.
 
 `inet_flow_establish()` and `inet_flow_close()` set the state of a flow, for
 callers that learn about the connection another way.

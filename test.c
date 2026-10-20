@@ -1503,6 +1503,72 @@ guint8 *build_pkt_tcp(guint8 * buffer,
     return p;
 }
 
+static InetFlow *flow_tcp_send(InetFlowTable * table, guint16 eth_protocol, gboolean from_server, guint16 flags, guint64 ts)
+{
+    guint len = make_tcp_pkt(test_buffer, eth_protocol, from_server, flags, 1, 1, 1000, NULL);
+    InetFlow *flow = inet_flow_get(table, test_buffer, len, ts, FLOW_GET, NULL);
+
+    g_assert_nonnull(flow);
+    return flow;
+}
+
+#define SECONDS(s) ((guint64) (s) * TIMESTAMP_RESOLUTION_US)
+
+/* After a FIN from one end the other end can still send, so the flow stays
+ * open until both ends have sent a FIN */
+void test_flow_tcp_half_close(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    setup_test();
+    flow_tcp_send(table, eth_protocol, FALSE, SYN, SECONDS(1));
+    flow_tcp_send(table, eth_protocol, TRUE, SYN_ACK, SECONDS(1));
+    flow = flow_tcp_send(table, eth_protocol, FALSE, FIN_ACK, SECONDS(2));
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+    flow_tcp_send(table, eth_protocol, FALSE, FIN_ACK, SECONDS(3));
+    flow_tcp_send(table, eth_protocol, TRUE, ACK, SECONDS(4));
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+
+    /* The server keeps sending after a gap longer than the closed timeout */
+    g_assert_null(inet_flow_expire(table, SECONDS(4 + INET_FLOW_DEFAULT_CLOSED_TIMEOUT + 10)));
+    flow_tcp_send(table, eth_protocol, TRUE, ACK, SECONDS(30));
+
+    flow_tcp_send(table, eth_protocol, TRUE, FIN_ACK, SECONDS(31));
+    g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
+
+    /* The last ACK does not open the flow again */
+    flow_tcp_send(table, eth_protocol, FALSE, ACK, SECONDS(31));
+    g_assert_cmpuint(flow->state, ==, FLOW_CLOSED);
+    g_assert(inet_flow_expire(table, SECONDS(31 + INET_FLOW_DEFAULT_CLOSED_TIMEOUT)) == flow);
+
+    /* A new connection on the tuple needs a FIN from both ends again */
+    flow_tcp_send(table, eth_protocol, FALSE, SYN, SECONDS(32));
+    flow_tcp_send(table, eth_protocol, TRUE, SYN_ACK, SECONDS(32));
+    flow_tcp_send(table, eth_protocol, TRUE, FIN_ACK, SECONDS(33));
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+    inet_flow_table_free(table);
+}
+
+/* A connection first seen after its handshake opens once both ends are seen */
+void test_flow_tcp_midstream_open(gconstpointer data)
+{
+    guint16 eth_protocol = GPOINTER_TO_UINT(data);
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow;
+
+    setup_test();
+    flow = flow_tcp_send(table, eth_protocol, FALSE, ACK, SECONDS(1));
+    flow_tcp_send(table, eth_protocol, FALSE, ACK, SECONDS(2));
+    g_assert_cmpuint(flow->state, ==, FLOW_NEW);
+    flow_tcp_send(table, eth_protocol, TRUE, ACK, SECONDS(3));
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+    g_assert_null(inet_flow_expire(table, SECONDS(3 + INET_FLOW_DEFAULT_NEW_TIMEOUT + 10)));
+    g_assert(inet_flow_expire(table, SECONDS(3 + INET_FLOW_DEFAULT_OPEN_TIMEOUT)) == flow);
+    inet_flow_table_free(table);
+}
+
 void test_flow_tcp_state_basic()
 {
     InetFlowTable *table;
@@ -1526,8 +1592,14 @@ void test_flow_tcp_state_basic()
     g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 1, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
 
-    /* Incoming TCP FIN Packet */
+    /* Incoming TCP FIN Packet without an ACK does not close the flow */
     p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE, TEST_SPORT, TEST_DPORT, FIN);
+    len = (guint) (p - test_buffer);
+    g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 2, FLOW_GET, NULL)));
+    g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
+
+    /* Incoming TCP FIN-ACK Packet closes one direction */
+    p = build_pkt_tcp(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_TCP, FALSE, TEST_SPORT, TEST_DPORT, FIN_ACK);
     len = (guint) (p - test_buffer);
     g_assert_nonnull((flow = inet_flow_get(table, test_buffer, len, 2, FLOW_GET, NULL)));
     g_assert_cmpuint(flow->state, ==, FLOW_OPEN);
@@ -4521,6 +4593,10 @@ int main(int argc, char *argv[])
     g_test_add_func("/flow/table/free_fragments", test_flow_table_free_fragments);
     g_test_add_data_func("/flow/fragment/direction/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_fragment_direction);
     g_test_add_data_func("/flow/direction/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_direction);
+    g_test_add_data_func("/flow/tcp/half_close/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_tcp_half_close);
+    g_test_add_data_func("/flow/tcp/half_close/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_tcp_half_close);
+    g_test_add_data_func("/flow/tcp/midstream_open/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_flow_tcp_midstream_open);
+    g_test_add_data_func("/flow/tcp/midstream_open/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_tcp_midstream_open);
     g_test_add_data_func("/flow/direction/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_direction);
     g_test_add_data_func("/flow/fragment/direction/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_flow_fragment_direction);
     g_test_add_func("/clear/expired_frag_info", test_clear_expired_frag_info);

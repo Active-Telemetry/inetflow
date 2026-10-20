@@ -19,7 +19,6 @@
 
 #define DEBUG(fmt, args...)
 //#define DEBUG(fmt, args...) {g_printf("%s: ",__func__);g_printf (fmt, ## args);}
-#define CHECK_BIT(__v,__p) ((__v) & (1<<(__p)))
 #define TIMESTAMP_RESOLUTION_US     1000000
 #define FRAG_EXPIRY_TIME            INET_FRAG_DEFAULT_TIMEOUT
 #define MAX_FRAG_DEPTH              INET_FRAG_DEFAULT_MAX
@@ -62,6 +61,7 @@ typedef struct _InetFlowPriv {
     guint8 lifetime;
     guint16 flags;              /* TCP flags of the packet, for lookups */
     gboolean reversed;          /* The original direction is the reverse of the flow tuple */
+    guint8 fins;                /* The directions that have sent a FIN/ACK */
     guint32 hash;
     struct _InetTcpFlow *tcp;   /* Created by INET_FLOW_TCP_TRACK */
 } InetFlowPriv;
@@ -1698,59 +1698,76 @@ void inet_flow_tcp_link(InetFlow * flow, InetFlow * linked, const InetAddr * cli
     FLOW_PRIV(linked)->tcp = tcp_flow;
 }
 
-/* Update the flow state and lifetime for a packet. The lifetime is changed
- * while the flow is out of the expiry queues. */
+static void flow_state_set(InetFlowPriv * flow, InetFlowState state, int lifetime)
+{
+    flow->pub.state = state;
+    flow->lifetime = lifetime;
+}
+
+/* The flow tuple is the tuple of the first packet, which gives the original
+ * direction until a TCP SYN is seen. The tuples are compared with their
+ * addresses, so that a flow with the same port at each end has two
+ * directions. */
+static guint8 flow_direction(InetFlowPriv * flow, InetFlowPriv * packet)
+{
+    return inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple) != flow->reversed ? FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
+}
+
+/* The direction values are separate bits */
+#define BOTH_DIRECTIONS (FLOW_DIRECTION_ORIGINAL | FLOW_DIRECTION_REPLY)
+
+/* Update the flow state and lifetime for a packet, and find its direction.
+ * The lifetime is changed while the flow is out of the expiry queues. */
 static void inet_flow_update_tcp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    /* FIN */
-    if (CHECK_BIT(packet->flags, 0)) {
-        /* ACK */
-        if (CHECK_BIT(packet->flags, 4)) {
-            flow->pub.state = FLOW_CLOSED;
-            flow->lifetime = LIFETIME_CLOSED;
-        }
+    guint16 flags = packet->flags;
+
+    /* The client sends the SYN, so its direction is the original one */
+    if ((flags & (TCP_FIN | TCP_SYN | TCP_ACK)) == TCP_SYN) {
+        flow->reversed = !inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple);
+        flow->fins = 0;
     }
-    /* SYN */
-    else if (CHECK_BIT(packet->flags, 1)) {
-        /* ACK */
-        if (CHECK_BIT(packet->flags, 4)) {
-            flow->pub.state = FLOW_OPEN;
-            flow->lifetime = LIFETIME_OPEN;
-        } else {
-            flow->pub.state = FLOW_NEW;
-            flow->lifetime = LIFETIME_NEW;
-            /* The client sends the SYN, so its direction is the original one */
-            flow->reversed = !inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple);
+    packet->pub.direction = flow_direction(flow, packet);
+
+    if (flags & TCP_FIN) {
+        /* After one FIN the other end can still send, so the connection is
+         * closed when both ends have sent a FIN. A FIN without an ACK is not
+         * part of a connection, for example a port scan. */
+        if (flags & TCP_ACK) {
+            flow->fins |= packet->pub.direction;
+            if (flow->fins == BOTH_DIRECTIONS)
+                flow_state_set(flow, FLOW_CLOSED, LIFETIME_CLOSED);
         }
-    }
-    /* RST */
-    else if (CHECK_BIT(packet->flags, 2)) {
-        flow->pub.state = FLOW_CLOSED;
-        flow->lifetime = LIFETIME_CLOSED;
+    } else if (flags & TCP_SYN) {
+        if (flags & TCP_ACK)
+            flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
+        else
+            flow_state_set(flow, FLOW_NEW, LIFETIME_NEW);
+    } else if (flags & TCP_RST) {
+        flow_state_set(flow, FLOW_CLOSED, LIFETIME_CLOSED);
+    } else if (flow->pub.state == FLOW_NEW && flow->pub.direction && packet->pub.direction != flow->pub.direction) {
+        /* A connection first seen after its handshake is open once both
+         * ends have been seen */
+        flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
     }
 }
 
 static void inet_flow_update_udp(InetFlowPriv * flow, InetFlowPriv * packet)
 {
-    if (flow->pub.direction && packet->pub.direction && packet->pub.direction != flow->pub.direction) {
-        flow->pub.state = FLOW_OPEN;
-        flow->lifetime = LIFETIME_OPEN;
-    }
+    if (flow->pub.direction && packet->pub.direction && packet->pub.direction != flow->pub.direction)
+        flow_state_set(flow, FLOW_OPEN, LIFETIME_OPEN);
 }
 
 static void inet_flow_update(InetFlowPriv * flow, InetFlowPriv * packet)
 {
     remove_flow_by_expiry(flow);
-    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_TCP)
+    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_TCP) {
         inet_flow_update_tcp(flow, packet);
-    /* The flow tuple is the tuple of the first packet, which gives the
-     * original direction until a TCP SYN is seen. The tuples are compared
-     * with their addresses, so that a flow with the same port at each end
-     * has two directions. */
-    packet->pub.direction = inet_tuple_exact(&packet->pub.tuple, &flow->pub.tuple) != flow->reversed ?
-        FLOW_DIRECTION_ORIGINAL : FLOW_DIRECTION_REPLY;
-    if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_UDP)
-        inet_flow_update_udp(flow, packet);
+    } else {
+        packet->pub.direction = flow_direction(flow, packet);
+        if (inet_flow_protocol(&flow->pub) == IP_PROTOCOL_UDP)
+            inet_flow_update_udp(flow, packet);
+    }
     insert_flow_by_expiry(flow);
     flow->pub.direction = packet->pub.direction;
 }
