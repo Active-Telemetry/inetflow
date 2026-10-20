@@ -710,6 +710,24 @@ workflow in `.github/workflows` runs both builds on each push and pull
 request, and fails on memory errors, leaks or undefined behaviour. It can also
 be started by hand.
 
+`make fuzz` fuzzes `inet_flow_get()` and `inet_packet_parse()` with libFuzzer.
+Run it locally after a change to the parser, and before a release.
+
+- It runs for 60 seconds, or for `FUZZ_TIME` seconds, and needs clang.
+- It starts from the frames of `test.pcap` and `testv6.pcap`, and keeps the
+  inputs it finds in `fuzz/corpus`.
+- An input that crashes is written to a `crash-*` file, and
+  `./fuzz/fuzz_flow crash-...` runs it again.
+- Add a unit test for each bug it finds, so that `make test` checks it on
+  every run.
+
+| Fuzzing time | Code paths reached |
+|---|---|
+| 10 s | 91% |
+| 60 s | 98% |
+| 120 s | 99% |
+| 300 s | 100% |
+
 ## Demo programs
 
 `demo` prints the flows in a capture file or on an interface. It uses libndpi

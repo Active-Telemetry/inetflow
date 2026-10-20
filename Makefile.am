@@ -40,7 +40,9 @@ unittest_LDADD = $(libinetflow_la_LIBADD)
 
 # The unit tests built with AddressSanitizer and UndefinedBehaviorSanitizer,
 # which report unaligned and out of bounds reads that valgrind does not
-CLEANFILES = unittest-asan
+CLEANFILES = unittest-asan fuzz/fuzz_flow
+
+.PHONY: test test-asan fuzz
 
 unittest-asan: test.c inetflow.c inetflow.h
 	$(CC) $(CFLAGS) $(WARN_CFLAGS) -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
@@ -57,6 +59,23 @@ test: unittest test-asan
 	$(Q)lcov -q --capture --directory . --output-file coverage.info
 	$(Q)genhtml -q coverage.info --output-directory gcov
 
+# Fuzz inet_flow_get() and inet_packet_parse() for FUZZ_TIME seconds, starting
+# from the frames of the test captures. libFuzzer needs clang. Inputs that
+# crash are written to crash-* files. Older clang sanitizers crash at random on
+# startup when Linux 6.5 and later randomise addresses with more bits, so the
+# fuzzer runs without address randomisation.
+FUZZ_CC = clang
+FUZZ_TIME = 60
+
+fuzz/fuzz_flow: fuzz/fuzz_flow.c inetflow.c inetflow.h
+	@mkdir -p fuzz
+	$(FUZZ_CC) $(WARN_CFLAGS) -g -O1 -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=all \
+		$(GLIB_CFLAGS) -I$(srcdir) $(srcdir)/fuzz/fuzz_flow.c $(srcdir)/inetflow.c -o $@ $(GLIB_LIBS)
+
+fuzz: fuzz/fuzz_flow
+	$(Q)$(srcdir)/fuzz/pcap_to_corpus.py fuzz/corpus $(srcdir)/test.pcap $(srcdir)/testv6.pcap
+	$(Q)setarch $$(uname -m) -R ./fuzz/fuzz_flow -max_total_time=$(FUZZ_TIME) -max_len=2048 fuzz/corpus
+
 indent:
-	indent -kr -ncs -nut -l140 inetflow.c inetflow.h test.c demo.c inetmon.c
+	indent -kr -ncs -nut -l140 inetflow.c inetflow.h test.c demo.c inetmon.c fuzz/fuzz_flow.c
 	rm -f *.c~ *.h~

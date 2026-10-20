@@ -9,6 +9,9 @@ gcov
 coverage.info
 unittest
 unittest-asan
+fuzz/fuzz_flow
+fuzz/corpus/
+crash-*
 demo
 inetmon
 

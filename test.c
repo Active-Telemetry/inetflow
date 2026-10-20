@@ -2765,6 +2765,11 @@ void test_tuple_hash()
     inet_tuple_set(&b, AF_INET6, IP_PROTOCOL_TCP, &dst6, htons(80), &src6, htons(5000));
     g_assert_cmpuint(inet_tuple_hash(&a), ==, inet_tuple_hash(&b));
 
+    /* Ports of 32768 and above */
+    inet_tuple_set(&a, AF_INET, IP_PROTOCOL_UDP, &src, htons(50000), &dst, htons(60000));
+    inet_tuple_set(&b, AF_INET, IP_PROTOCOL_UDP, &dst, htons(60000), &src, htons(50000));
+    g_assert_cmpuint(inet_tuple_hash(&a), ==, inet_tuple_hash(&b));
+
     /* Tuples without ports differ by address and protocol */
     inet_tuple_set(&a, AF_INET, IP_PROTOCOL_ICMP, &src, 0, &dst, 0);
     inet_tuple_set(&b, AF_INET, IP_PROTOCOL_ICMP, &src2, 0, &dst, 0);
