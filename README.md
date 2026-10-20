@@ -386,6 +386,10 @@ acknowledgement of the FIN.
 
 A valid RST in any tracked state moves the connection to `CLOSED`.
 
+A SYN in `CLOSED` or `TIME_WAIT` starts a new connection on the same tuple,
+unless it has the ISN of the old connection. A SYN in `UNTRACKED` does not
+start tracking.
+
 The first packet of a connection sets one of three starting states:
 
 | First packet | State |

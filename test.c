@@ -3725,6 +3725,38 @@ void test_tcp_track_simultaneous_close(gconstpointer data)
     inet_flow_table_free(table);
 }
 
+/* A new connection on the tuple of a closed connection is tracked */
+void test_tcp_track_reuse(gconstpointer data)
+{
+    InetFlowTable *table = inet_flow_table_new();
+    InetFlow *flow, *first;
+    InetPacket pkt;
+
+    tcp_test_setup(data);
+    first = flow = tcp_establish(table);
+    tcp_send_ok(table, &flow, TRUE, RST, 101, 0, 0, 0, INET_TCP_STATE_CLOSED);
+
+    /* A retransmission of the old SYN does not reopen the connection */
+    tcp_send_ok(table, &flow, TRUE, SYN, 100, 0, 1000, 0, INET_TCP_STATE_CLOSED);
+
+    g_assert_true(tcp_send(table, &flow, TRUE, SYN, 9000, 0, 1000, 0, &pkt));
+    g_assert_cmpint(pkt.tcp.state, ==, INET_TCP_STATE_CLOSED);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 7000, 9001, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 9001, 7001, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    g_assert(flow == first);
+
+    /* The same after a close that ends in TIME_WAIT */
+    tcp_send_ok(table, &flow, TRUE, FIN_ACK, 9001, 7001, 1000, 0, INET_TCP_STATE_FIN_WAIT1);
+    tcp_send_ok(table, &flow, FALSE, FIN_ACK, 7001, 9002, 1000, 0, INET_TCP_STATE_TIME_WAIT);
+    tcp_send_events(table, &flow, TRUE, SYN, 9000, 0, 1000, 0, INET_TCP_EVENT_SYN_RESEND, TRUE);
+    g_assert_cmpint(inet_flow_tcp_state(flow), ==, INET_TCP_STATE_TIME_WAIT);
+    tcp_send_ok(table, &flow, TRUE, SYN, 20000, 0, 1000, 0, INET_TCP_STATE_SYN_SENT);
+    tcp_send_ok(table, &flow, FALSE, SYN_ACK, 30000, 20001, 1000, 0, INET_TCP_STATE_SYN_RECV);
+    tcp_send_ok(table, &flow, TRUE, ACK, 20001, 30001, 1000, 0, INET_TCP_STATE_ESTABLISHED);
+    inet_flow_table_free(table);
+}
+
 void test_tcp_track_untracked(gconstpointer data)
 {
     InetFlowTable *table = inet_flow_table_new();
@@ -4394,6 +4426,8 @@ int main(int argc, char *argv[])
     g_test_add_data_func("/tcp/track/simultaneous_close/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_tcp_track_simultaneous_close);
     g_test_add_data_func("/tcp/track/simultaneous_close/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_simultaneous_close);
     g_test_add_data_func("/tcp/track/untracked/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_tcp_track_untracked);
+    g_test_add_data_func("/tcp/track/reuse/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_tcp_track_reuse);
+    g_test_add_data_func("/tcp/track/reuse/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_reuse);
     g_test_add_data_func("/tcp/track/untracked/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_untracked);
     g_test_add_data_func("/tcp/track/one_sided/ipv4", GUINT_TO_POINTER(ETH_PROTOCOL_IP), test_tcp_track_one_sided);
     g_test_add_data_func("/tcp/track/one_sided/ipv6", GUINT_TO_POINTER(ETH_PROTOCOL_IPV6), test_tcp_track_one_sided);

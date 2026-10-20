@@ -1597,6 +1597,17 @@ static gboolean tcp_update(InetFlow * flow, InetPacket * pkt)
     tcp_flow = FLOW_PRIV(flow)->tcp;
     tcp = tcp_flow->state;
 
+    /* A client can open a new connection on the same tuple once the old one
+     * has closed. A SYN with the ISN of the old connection is a retransmission
+     * of the old SYN, so it does not start a new connection. */
+    if ((tcp->state == INET_TCP_STATE_CLOSED || tcp->state == INET_TCP_STATE_TIME_WAIT)
+        && (pkt->tcp.flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN && pkt->tcp.seq != tcp->client.isn) {
+        guint refcount = tcp->refcount;
+
+        memset(tcp, 0, sizeof(*tcp));
+        tcp->refcount = refcount;
+    }
+
     if (tcp->state == INET_TCP_STATE_NONE) {
         if ((pkt->tcp.flags & (TCP_SYN | TCP_ACK | TCP_RST)) == TCP_SYN) {
             tcp_peer_syn(&tcp->client, pkt);
