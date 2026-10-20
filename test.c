@@ -209,9 +209,9 @@ static guint8 *build_hdr_auth(guint8 * buffer, guint16 next_ip_protocol)
     auth_hdr_t *auth_hdr = (auth_hdr_t *) p;
     auth_hdr->next_hdr = next_ip_protocol;
     auth_hdr->payload_len = 4;
-    auth_hdr->reserved;
-    auth_hdr->spi_seq;
-    auth_hdr->icv;
+    auth_hdr->reserved = 0;
+    auth_hdr->spi_seq = 0;
+    auth_hdr->icv = 0;
     p += (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
     return p;
 }
@@ -1295,10 +1295,8 @@ void test_flow_table_properties()
     inet_flow_table_free(table);
 }
 
-void flow_print_protocol(InetFlow * flow)
+static void flow_check_protocol(InetFlow * flow, gpointer data)
 {
-    guint protocol;
-
     g_assert_nonnull(flow);
     g_assert((inet_flow_protocol(flow) == IP_PROTOCOL_TCP) || (inet_flow_protocol(flow) == IP_PROTOCOL_UDP));
     g_assert_nonnull(inet_tuple_server_addr(&flow->tuple));
@@ -1317,7 +1315,7 @@ void test_flow_foreach()
     len = make_pkt(test_buffer, ETH_PROTOCOL_IPV6, IP_PROTOCOL_TCP);
     g_assert_nonnull((flow2 = inet_flow_get(table, test_buffer, len, 0, FLOW_GET, NULL)));
 
-    inet_flow_foreach(table, (IFFunc) flow_print_protocol, NULL);
+    inet_flow_foreach(table, flow_check_protocol, NULL);
 
     inet_flow_free(flow1);
     inet_flow_free(flow2);
@@ -1333,7 +1331,6 @@ void test_flow_create()
     guint len = make_pkt(test_buffer, ETH_PROTOCOL_IP, IP_PROTOCOL_UDP);
     InetFlow *flow = inet_flow_get(table, test_buffer, len, now, FLOW_GET, NULL);
     g_assert_nonnull(flow);
-    guint64 size;
     g_assert_cmpint(inet_flow_table_size(table), ==, 1);
     inet_flow_free(flow);
     inet_flow_table_free(table);
@@ -1365,7 +1362,6 @@ void test_flow_table_size()
     setup_test();
     g_assert_nonnull(table);
 
-    guint64 max;
     g_assert_cmpint(table->max, ==, 0);
 
     inet_flow_table_max_set(table, 1);
@@ -1389,7 +1385,6 @@ void test_flow_not_expired()
     guint64 later = now + (INET_FLOW_DEFAULT_NEW_TIMEOUT * 1000000) - 1;
     InetFlowTable *table;
     InetFlow *flow;
-    guint64 size;
 
     setup_test();
     g_assert_nonnull(table = inet_flow_table_new());
@@ -1407,7 +1402,6 @@ void test_flow_expired()
     guint64 later = now + (INET_FLOW_DEFAULT_NEW_TIMEOUT * 1000000);
     InetFlowTable *table;
     InetFlow *flow;
-    guint64 size;
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
@@ -1475,7 +1469,6 @@ void test_flow_tcp_update()
 {
     InetFlowTable *table;
     InetFlow *flow;
-    guint state = FLOW_CLOSED;
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
@@ -2043,7 +2036,6 @@ void test_flow_expiry_queue()
     guint64 timeout = now + (INET_FLOW_DEFAULT_NEW_TIMEOUT * 1000000);
 
     InetFlowTable *table;
-    guint64 size;
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new()));
@@ -2328,7 +2320,7 @@ void test_flow_parse_gre_options()
     };
     guint16 protocols[] = { ETH_PROTOCOL_IP, ETH_PROTOCOL_IPV6 };
     guint len;
-    int i, j;
+    guint i, j;
 
     for (i = 0; i < G_N_ELEMENTS(flags); i++) {
         for (j = 0; j < G_N_ELEMENTS(protocols); j++) {
@@ -2373,7 +2365,7 @@ void test_flow_parse_ip_in_ipv4()
 {
     guint inner[] = { IP_PROTOCOL_IPV4, IP_PROTOCOL_IPV6 };
     guint len;
-    int i;
+    guint i;
 
     for (i = 0; i < G_N_ELEMENTS(inner); i++) {
         setup_test();
@@ -2401,7 +2393,7 @@ void test_flow_parse_ip_in_ipv6()
 {
     guint inner[] = { IP_PROTOCOL_IPV4, IP_PROTOCOL_IPV6 };
     guint len;
-    int i;
+    guint i;
 
     for (i = 0; i < G_N_ELEMENTS(inner); i++) {
         setup_test();
@@ -2944,7 +2936,7 @@ void test_flow_parse_malformed_gre()
     guint16 protocols[] = { ETH_PROTOCOL_IP, ETH_PROTOCOL_IPV6 };
     guint8 *p;
     guint len;
-    int i;
+    guint i;
 
     for (i = 0; i < G_N_ELEMENTS(protocols); i++) {
         setup_test();
@@ -3109,7 +3101,7 @@ void test_flow_direction(gconstpointer data)
     InetFlowTable *table = inet_flow_table_new();
     InetFlow *flow;
     guint len;
-    int i;
+    guint i;
 
     setup_test();
     /* A TCP flow first seen mid-stream takes its original direction from the first packet */

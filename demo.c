@@ -31,7 +31,9 @@
 #include <curses.h>
 #include "inetflow.h"
 
+#if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
 static gboolean dpi = FALSE;
+#endif
 static gchar *filename = NULL;
 static gchar *iface = NULL;
 static int interval = 1;
@@ -43,6 +45,7 @@ static gboolean running = true;
 #define MAXIMUM_SNAPLEN 262144
 
 static void print_flow(InetFlow * flow, gpointer data);
+static void clean_flow(InetFlow * flow, gpointer data);
 
 static inline uint64_t get_time_us(void)
 {
@@ -126,10 +129,14 @@ static void analyse_frame(InetFlow * flow, const uint8_t * iph, uint32_t length)
 }
 #endif
 
-static void process_frame(const uint8_t * frame, uint32_t length)
+/* Use the capture timestamp, so that flows from a capture file expire by the
+ * time in the file, and live flows use the same clock as inet_flow_expire() */
+static void process_frame(const uint8_t * frame, const struct pcap_pkthdr *hdr)
 {
+    guint64 timestamp = (guint64) hdr->ts.tv_sec * 1000000 + hdr->ts.tv_usec;
+    uint32_t length = hdr->caplen;
     InetPacket pkt;
-    InetFlow *flow = inet_flow_get(table, frame, length, 0,
+    InetFlow *flow = inet_flow_get(table, frame, length, timestamp,
                                    INET_FLOW_CREATE | INET_FLOW_UPDATE | INET_FLOW_L2 | INET_FLOW_TUNNEL, &pkt);
     const uint8_t *iph = pkt.l3;
     if (flow && iph) {
@@ -142,9 +149,14 @@ static void process_frame(const uint8_t * frame, uint32_t length)
     return;
 }
 
+/* Sort the flows with the most bytes first. The difference of the byte
+ * counts does not fit in the return value. */
 static gint compare_flow(InetFlow * a, InetFlow * b)
 {
-    return (b->inbytes + b->outbytes) - (a->inbytes + a->outbytes);
+    guint64 a_bytes = a->inbytes + a->outbytes;
+    guint64 b_bytes = b->inbytes + b->outbytes;
+
+    return a_bytes < b_bytes ? 1 : a_bytes > b_bytes ? -1 : 0;
 }
 
 static void collect_flow(InetFlow * flow, gpointer data)
@@ -156,10 +168,10 @@ static void collect_flow(InetFlow * flow, gpointer data)
 static void dump_stats(void)
 {
     int count = 0;
-    int col, row;
+    int row;
     GList *flows = NULL;
 
-    getmaxyx(stdscr, row, col);
+    row = getmaxy(stdscr);
     clear();
     refresh();
     inet_flow_foreach(table, (IFFunc) collect_flow, &flows);
@@ -182,7 +194,6 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     struct pcap_pkthdr hdr;
     const uint8_t *frame;
     pcap_t *pcap;
-    int status;
     uint64_t lasttime = get_time_us();
 
     pcap = pcap_open_live(interface, snaplen, promisc, to_ms, error_pcap);
@@ -194,10 +205,13 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     g_printf("Reading from \"%s\"\n", interface);
     initscr();
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
-        process_frame(frame, hdr.caplen);
-        if (interval && ((get_time_us() - lasttime) / 1000000) > interval) {
+        process_frame(frame, &hdr);
+        if (interval > 0 && (get_time_us() - lasttime) / 1000000 > (uint64_t) interval) {
+            InetFlow *expired;
+
             lasttime = get_time_us();
-            inet_flow_expire(table, lasttime);
+            while ((expired = inet_flow_expire(table, lasttime)))
+                clean_flow(expired, NULL);
             dump_stats();
         }
     }
@@ -222,7 +236,7 @@ static void process_pcap(const char *filename)
 
     g_printf("Reading \"%s\"\n", filename);
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
-        process_frame(frame, hdr.caplen);
+        process_frame(frame, &hdr);
     }
     pcap_close(pcap);
 
@@ -242,10 +256,10 @@ static void print_flow(InetFlow * flow, gpointer data)
 
     inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_server_addr(&flow->tuple), lips, INET6_ADDRSTRLEN);
     inet_ntop(inet_tuple_family(&flow->tuple), inet_tuple_client_addr(&flow->tuple), uips, INET6_ADDRSTRLEN);
-    g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5zu %-7zu %-7zu  %s %s\r\n",
-             inet_tuple_hash(&flow->tuple), uips, lips, inet_flow_protocol(flow),
-             g_ntohs(inet_tuple_client_port(&flow->tuple)),
+    g_printf("0x%04x: %-45s %-45s %-2d %-5d %-5d  %-5" G_GUINT64_FORMAT " %-7" G_GUINT64_FORMAT " %-7" G_GUINT64_FORMAT "  %s %s\r\n",
+             inet_tuple_hash(&flow->tuple), lips, uips, inet_flow_protocol(flow),
              g_ntohs(inet_tuple_server_port(&flow->tuple)),
+             g_ntohs(inet_tuple_client_port(&flow->tuple)),
              flow->packets, flow->inbytes, flow->outbytes,
              flow->state == FLOW_NEW ? "NEW   " : (flow->state == FLOW_OPEN ? "OPEN  " : "CLOSED"),
 #if defined(LIBNDPI_OLD_API) || defined(LIBNDPI_NEW_API) || defined(LIBNDPI_NEWEST_API)
@@ -262,7 +276,7 @@ static void clean_flow(InetFlow * flow, gpointer data)
         ndpi_free_flow(ndpi->flow);
         ndpi_free(ndpi->src);
         ndpi_free(ndpi->dst);
-        free(ndpi);
+        ndpi_free(ndpi);
     }
 #endif
     inet_flow_free(flow);
@@ -276,7 +290,7 @@ static GOptionEntry entries[] = {
 #endif
     {"timeout", 't', 0, G_OPTION_ARG_INT, &interval, "Display timeout", NULL},
     {"verbose", 'v', 0, G_OPTION_ARG_NONE, &verbose, "Be verbose", NULL},
-    {NULL}
+    {0}
 };
 
 static void intHandler(int dummy)
@@ -288,7 +302,6 @@ int main(int argc, char **argv)
 {
     GError *error = NULL;
     GOptionContext *context;
-    gint i, j;
 
     /* Parse options */
     context = g_option_context_new("- Demonstration of libinetflow");
@@ -298,7 +311,7 @@ int main(int argc, char **argv)
         g_print("ERROR: %s\n", error->message);
         exit(1);
     }
-    if ((!filename && !iface) || filename && iface) {
+    if ((!filename && !iface) || (filename && iface)) {
         g_print("%s", g_option_context_get_help(context, FALSE, NULL));
         g_print("ERROR: Require interface or pcap file\n");
         exit(1);

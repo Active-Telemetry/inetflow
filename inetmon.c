@@ -53,7 +53,7 @@ static inline uint64_t get_time_us(void)
 typedef struct subnet {
     unsigned short family;
     unsigned short prefix;
-    struct sockaddr_storage sa;
+    InetAddr addr;
 } subnet;
 
 static GList *private_subnets = NULL;
@@ -66,25 +66,54 @@ typedef struct host {
 
 static GHashTable *host_htable = NULL;
 
-static bool is_local_v4(InetTuple * tuple, const InetAddr * addr)
+static gboolean prefix_match(const InetAddr * a, const InetAddr * b, guint prefix)
 {
-    //TODO
-    // unsigned int mask = 0xFFFFFFFF << (32 - network_bits);
-    return inet_tuple_family(tuple) == AF_INET && addr->bytes[0] == 192 && addr->bytes[1] == 168;
+    guint bytes = prefix / 8;
+    guint bits = prefix % 8;
+
+    if (memcmp(a->bytes, b->bytes, bytes) != 0)
+        return FALSE;
+    return bits == 0 || ((a->bytes[bytes] ^ b->bytes[bytes]) & (0xff << (8 - bits))) == 0;
+}
+
+static gboolean is_private(InetTuple * tuple, const InetAddr * addr)
+{
+    GList *l;
+
+    for (l = private_subnets; l; l = l->next) {
+        subnet *sn = l->data;
+        if (sn->family == inet_tuple_family(tuple) && prefix_match(addr, &sn->addr, sn->prefix))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+/* Host names come from reverse DNS, so they are not trusted. Escape the
+ * characters that end an InfluxDB line protocol tag value, and replace
+ * control characters, which can not be escaped. */
+static gchar *escape_tag_value(const char *value)
+{
+    GString *escaped = g_string_new(NULL);
+
+    for (; *value; value++) {
+        if (*value == ',' || *value == '=' || *value == ' ' || *value == '\\')
+            g_string_append_c(escaped, '\\');
+        g_string_append_c(escaped, g_ascii_iscntrl(*value) ? '_' : *value);
+    }
+    return g_string_free(escaped, FALSE);
 }
 
 static void update_host(InetTuple * tuple, uint32_t bytes)
 {
     int family = inet_tuple_family(tuple);
     char lips[INET6_ADDRSTRLEN];
-    char hostname[INET6_ADDRSTRLEN];
     struct sockaddr_storage ip;
     gboolean src;
     host *h;
 
-    if (is_local_v4(tuple, &tuple->src))
+    if (is_private(tuple, &tuple->src))
         src = TRUE;
-    else if (is_local_v4(tuple, &tuple->dst))
+    else if (is_private(tuple, &tuple->dst))
         src = FALSE;
     else
         return;
@@ -94,7 +123,8 @@ static void update_host(InetTuple * tuple, uint32_t bytes)
     h = g_hash_table_lookup(host_htable, lips);
     if (!h) {
         h = g_malloc0(sizeof(host));
-        if (getnameinfo((const struct sockaddr *)&ip, sizeof(struct sockaddr_in), h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
+        socklen_t ip_len = family == AF_INET ? sizeof(struct sockaddr_in) : sizeof(struct sockaddr_in6);
+        if (getnameinfo((const struct sockaddr *)&ip, ip_len, h->name, INET6_ADDRSTRLEN, NULL, 0, NI_NAMEREQD) != 0) {
             strncpy(h->name, lips, INET6_ADDRSTRLEN);
         }
         g_hash_table_insert(host_htable, g_strdup(lips), h);
@@ -128,9 +158,11 @@ static void dump_host(gpointer key, gpointer value, gpointer user_data)
     if (!quiet && (h->inbytes || h->outbytes))
         g_printf("host: %s (%s) %lu in %lu out\r\n", h->name, (char *)key, h->inbytes, h->outbytes);
     if (db_host) {
-        char *tags = g_strdup_printf("host=%s", h->name);
+        gchar *name = escape_tag_value(h->name);
+        gchar *tags = g_strdup_printf("host=%s", name);
         ic_tags(tags);
-        free(tags);
+        g_free(tags);
+        g_free(name);
         ic_measure("traffic");
         ic_long("inbytes", h->inbytes);
         ic_long("outbytes", h->outbytes);
@@ -165,9 +197,7 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     struct pcap_pkthdr hdr;
     const uint8_t *frame;
     pcap_t *pcap;
-    int status;
     uint64_t lasttime;
-    int col, row;
 
     pcap = pcap_open_live(interface, snaplen, promisc, to_ms, error_pcap);
     if (pcap == NULL) {
@@ -179,11 +209,10 @@ static void process_interface(const char *interface, int snaplen, int promisc, i
     lasttime = get_time_us();
     if (!quiet) {
         initscr();
-        getmaxyx(stdscr, row, col);
     }
     while (running && (frame = pcap_next(pcap, &hdr)) != NULL) {
         process_frame(frame, hdr.caplen);
-        if (interval && ((get_time_us() - lasttime) / 1000000) > interval) {
+        if (interval > 0 && (get_time_us() - lasttime) / 1000000 > (uint64_t) interval) {
             lasttime = get_time_us();
             if (!quiet) {
                 clear();
@@ -235,11 +264,11 @@ void parse_private_networks(const gchar * private)
         slash++;
         sn->prefix = atoi(slash);
 
-        if (inet_pton(AF_INET, parameter, &((struct sockaddr_in *)&sn->sa)->sin_addr) == 1) {
+        if (inet_pton(AF_INET, parameter, &sn->addr.v4) == 1) {
             sn->family = AF_INET;
             if (sn->prefix < 8 || sn->prefix > 32)
                 g_error("Invalid IP mask \"%s\"\n", slash);
-        } else if (inet_pton(AF_INET6, parameter, &((struct sockaddr_in6 *)&sn->sa)->sin6_addr) == 1) {
+        } else if (inet_pton(AF_INET6, parameter, &sn->addr.v6) == 1) {
             sn->family = AF_INET6;
             if (sn->prefix < 8 || sn->prefix > 128)
                 g_error("Invalid IPv6 mask \"%s\"\n", slash);
@@ -250,10 +279,7 @@ void parse_private_networks(const gchar * private)
         parameter = strtok_r(NULL, ",", &ptr);
 
         char str[INET6_ADDRSTRLEN];
-        if (sn->family == AF_INET)
-            inet_ntop(sn->family, &((struct sockaddr_in *)&sn->sa)->sin_addr, str, INET_ADDRSTRLEN);
-        else
-            inet_ntop(sn->family, &((struct sockaddr_in6 *)&sn->sa)->sin6_addr, str, INET_ADDRSTRLEN);
+        inet_ntop(sn->family, &sn->addr, str, sizeof(str));
         printf("Adding private %s subnet %s/%d\n", sn->family == AF_INET ? "IPv4" : "IPv6", str, sn->prefix);
     }
     g_free(subnets);
@@ -267,7 +293,7 @@ static GOptionEntry entries[] = {
     {"private", 'p', 0, G_OPTION_ARG_STRING, &private, "Private Subnets (defaults to \"10.0.0.0/8,172.16.0.0/12,192.168.0.0/16\")", NULL},
     {"db_host", 'd', 0, G_OPTION_ARG_STRING, &db_host, "InfluxDB database hostname", NULL},
     {"db_name", 'n', 0, G_OPTION_ARG_STRING, &db_name, "InfluxDB database name (defaults to \"inetmon\"", NULL},
-    {NULL}
+    {0}
 };
 
 static void intHandler(int dummy)
@@ -279,7 +305,6 @@ int main(int argc, char **argv)
 {
     GError *error = NULL;
     GOptionContext *context;
-    gint i, j;
 
     /* Parse options */
     context = g_option_context_new("- IP Network Monitor");
@@ -289,7 +314,7 @@ int main(int argc, char **argv)
         g_print("ERROR: %s\n", error->message);
         exit(1);
     }
-    if ((!filename && !iface) || filename && iface) {
+    if ((!filename && !iface) || (filename && iface)) {
         g_print("%s", g_option_context_get_help(context, FALSE, NULL));
         g_print("ERROR: Require interface or pcap file\n");
         exit(1);

@@ -639,6 +639,11 @@ static guint32 get_hdr_len(guint8 hdr_ext_len)
     return (hdr_ext_len + IPV6_FIRST_8_OCTETS) * EIGHT_OCTET_UNITS;
 }
 
+static guint32 get_auth_hdr_len(guint8 payload_len)
+{
+    return (payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
+}
+
 static guint32 flow_hash(InetFlowPriv * f)
 {
     if (!f->hash)
@@ -836,7 +841,7 @@ static gboolean flow_parse_gre(InetPacket * pkt, const guint8 * data, guint32 le
     gre_hdr_t *gre = (gre_hdr_t *) data;
     if (length < sizeof(gre_hdr_t))
         return FALSE;
-    int offset = sizeof(gre_hdr_t);
+    guint32 offset = sizeof(gre_hdr_t);
     guint16 gre_flags = GUINT16_FROM_BE(gre->flags_version);
     guint16 proto = GUINT16_FROM_BE(gre->protocol);
 
@@ -1115,16 +1120,14 @@ static gboolean flow_parse_ipv6(InetPacket * pkt, const guint8 * data, guint32 l
 
         goto next_header;
     case IP_PROTOCOL_AUTH:
-        if (length < sizeof(auth_hdr_t)
-            || length < (((auth_hdr_t *) data)->payload_len + AH_HEADER_LEN_ADD)
-            * FOUR_BYTE_UNITS) {
+        if (length < sizeof(auth_hdr_t) || length < get_auth_hdr_len(((auth_hdr_t *) data)->payload_len)) {
             set_anomaly(pkt, INET_ANOMALY_IPV6_EXTHDR_TRUNCATED);
             return FALSE;
         }
         auth_hdr = (auth_hdr_t *) data;
         inet_tuple_set_protocol(f, auth_hdr->next_hdr);
-        data += (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
-        length -= (auth_hdr->payload_len + AH_HEADER_LEN_ADD) * FOUR_BYTE_UNITS;
+        data += get_auth_hdr_len(auth_hdr->payload_len);
+        length -= get_auth_hdr_len(auth_hdr->payload_len);
         goto next_header;
     case IP_PROTOCOL_ESP:
     case IP_PROTOCOL_NO_NEXT_HDR:

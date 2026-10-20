@@ -1,7 +1,10 @@
 lib_LTLIBRARIES = libinetflow.la
 
+# Callbacks and public functions have parameters that some of them do not use
+WARN_CFLAGS = -Wall -Wextra -Wno-unused-parameter
+
 libinetflow_la_CFLAGS = \
-	@CFLAGS@ \
+	$(WARN_CFLAGS) \
 	@GLIB_CFLAGS@
 
 libinetflow_la_LDFLAGS = \
@@ -40,7 +43,7 @@ unittest_LDADD = $(libinetflow_la_LIBADD)
 CLEANFILES = unittest-asan
 
 unittest-asan: test.c inetflow.c inetflow.h
-	$(CC) -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+	$(CC) $(CFLAGS) $(WARN_CFLAGS) -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
 		$(GLIB_CFLAGS) -I$(srcdir) $(srcdir)/test.c -o $@ $(GLIB_LIBS)
 
 test-asan: unittest-asan

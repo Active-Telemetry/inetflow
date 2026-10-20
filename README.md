@@ -45,9 +45,9 @@ make
 make install
 ```
 
-The build needs autoconf, automake, libtool, pkg-config, GLib 2 and ncurses.
-The demo programs also need libpcap, and `demo` uses libndpi when it is
-installed.
+The build needs autoconf, automake, libtool, pkg-config and GLib 2. The demo
+programs also need libpcap and ncurses, and `demo` uses libndpi when it is
+installed. `configure` says when the demo programs can not be built.
 
 Programs find the library with pkg-config:
 

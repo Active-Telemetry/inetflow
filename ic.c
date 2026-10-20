@@ -46,19 +46,20 @@ char *output; /* all the stats must fit in this buffer */
 long output_size = 0;
 long output_char = 0;
 
-char *influx_tags; /* saved tags for every influxdb line protocol mesurement */
+char influx_tags[256 + 1]; /* saved tags for every influxdb line protocol mesurement */
 
 int subended = 0;		/* stop ic_subend and ic_measureend both enig the measure */
 int first_sub = 0;		/* need to remove the ic_measure measure before adding ic_sub measure */
 char saved_section[64];
 char saved_sub[64];
 
-int sockfd;			/* file desciptor for socket connection */
+int sockfd = -1;		/* file desciptor for socket connection */
 
 void error(char *buf)
 {
     fprintf(stderr, "error: \"%s\" errno=%d meaning=\"%s\"\n", buf, errno, strerror(errno));
-    close(sockfd);
+    if (sockfd >= 0)
+	close(sockfd);
     sleep(2);			/* this can help the socket close cleanly at the remote end */
     exit(1);
 }
@@ -74,12 +75,7 @@ void ic_debug(int level)
 void ic_tags(char *t)	
 {
     DEBUG fprintf(stderr,"ic_tags(%s)\n",t);
-    if( influx_tags == (char *) 0) {
-        if( (influx_tags = (char *)malloc(MEGABYTE)) == (char *)-1)
-           error("failed to malloc() tags buffer");
-    }
-
-    strncpy(influx_tags,t,256);
+    snprintf(influx_tags, sizeof(influx_tags), "%s", t);
 }
 
 void ic_influx_database(char *host, long port, char *db) /* note: converts influxdb hostname to ip address */
@@ -88,31 +84,31 @@ void ic_influx_database(char *host, long port, char *db) /* note: converts influ
 	char errorbuf[1024 +1 ];
 
 	influx_port = port;
-	strncpy(influx_database,db,256);
+	snprintf(influx_database, sizeof(influx_database), "%s", db);
+	snprintf(influx_hostname, sizeof(influx_hostname), "%s", host);
 
-	if(host[0] <= '0' && host[0] <='9') { 
+	if (isdigit((unsigned char)host[0])) {
 		DEBUG fprintf(stderr,"ic_influx(ipaddr=%s,port=%ld,database=%s))\n",host,port,db);
-		strncpy(influx_ip,host,16);
+		snprintf(influx_ip, sizeof(influx_ip), "%s", host);
 	} else {
 		DEBUG fprintf(stderr,"ic_influx_by_hostname(host=%s,port=%ld,database=%s))\n",host,port,db);
-		strncpy(influx_hostname,host,1024);
-		if (isalpha(host[0])) {
+		if (isalpha((unsigned char)host[0])) {
 
 		    he = gethostbyname(host);
 		    if (he == NULL) {
-			sprintf(errorbuf, "influx host=%s to ip address convertion failed gethostbyname(), bailing out\n", host);
+			snprintf(errorbuf, sizeof(errorbuf), "influx host=%s to ip address convertion failed gethostbyname(), bailing out\n", host);
 			error(errorbuf);
 		    }
 		    /* this could return multiple ip addresses but we assume its the first one */
 		    if (he->h_addr_list[0] != NULL) {
-			strcpy(influx_ip, inet_ntoa(*(struct in_addr *) (he->h_addr_list[0])));
+			snprintf(influx_ip, sizeof(influx_ip), "%s", inet_ntoa(*(struct in_addr *) (he->h_addr_list[0])));
 			DEBUG fprintf(stderr,"ic_influx_by_hostname hostname=%s converted to ip address %s))\n",host,influx_ip);
 		    } else {
-			sprintf(errorbuf, "influx host=%s to ip address convertion failed (empty list), bailing out\n", host);
+			snprintf(errorbuf, sizeof(errorbuf), "influx host=%s to ip address convertion failed (empty list), bailing out\n", host);
 			error(errorbuf);
 		    }
 		} else {
-		    strcpy( influx_ip, host); /* perhaps the hostname is actually an ip address */
+		    snprintf(influx_ip, sizeof(influx_ip), "%s", host); /* perhaps the hostname is actually an ip address */
 		}
         }
 }
@@ -124,10 +120,8 @@ void ic_influx_userpw(char *user, char *pw)
 	strncpy(influx_password,pw,64);
 }
 
-int create_socket() 		/* returns 1 for error and 0 for ok */
+int create_socket() 		/* returns 1 when connected and 0 for an error */
 {
-    int i;
-    static char buffer[4096];
     static struct sockaddr_in serv_addr;
 
     if(debug) DEBUG fprintf(stderr, "socket: trying to connect to \"%s\":%ld\n", influx_ip, influx_port);
@@ -150,13 +144,14 @@ int create_socket() 		/* returns 1 for error and 0 for ok */
 
 void ic_check(long adding) /* Check the buffer space */
 {
-    if(output == (char *)0) {			/* First time create the buffer *
-	if( (output = (char *)malloc(MEGABYTE)) == (char *)-1)
-	    error("failed to malloc() output buffer");
-    }
-    if(output_char + (2*adding) > output_size) /* When near the end of the output buffer, extend it*/
-	if( (output = (char *)realloc(output, output_size + MEGABYTE)) == (char *)-1)
+    char *grown;
+
+    /* Each caller writes at most adding bytes after the check */
+    while (output_char + (2*adding) > output_size) {
+	if ((grown = realloc(output, output_size + MEGABYTE)) == NULL)
 	    error("failed to realloc() output buffer");
+	output = grown;
+	output_size += MEGABYTE;
     }
 }
 
@@ -173,7 +168,7 @@ void ic_measure(char *section)
     ic_check( strlen(section) + strlen(influx_tags) + 3);
 
     output_char += sprintf(&output[output_char], "%s,%s ", section, influx_tags);
-    strcpy(saved_section, section);
+    snprintf(saved_section, sizeof(saved_section), "%s", section);
     first_sub = 1;
     subended = 0;
     DEBUG fprintf(stderr, "ic_measure(\"%s\") count=%ld\n", section, output_char);
@@ -264,14 +259,13 @@ void ic_string(char *name, char *value)
 
 void ic_push()
 {
-    char header[1024];
     char result[1024];
     char buffer[1024 * 8];
     int ret;
     int i;
     int total;
     int sent;
-    int code;
+    int code = 0;
 
     if (output_char == 0)	/* nothing to send so skip this operation */
 	return;
@@ -282,7 +276,7 @@ void ic_push()
 	    sprintf(buffer, "POST /write?db=%s&u=%s&p=%s HTTP/1.1\r\nHost: %s:%ld\r\nContent-Length: %ld\r\n\r\n",
 		    influx_database, influx_username, influx_password, influx_hostname, influx_port, output_char);
 	    DEBUG fprintf(stderr, "buffer size=%ld\nbuffer=<%s>\n", strlen(buffer), buffer);
-	    if ((ret = write(sockfd, buffer, strlen(buffer))) != strlen(buffer)) {
+	    if ((ret = write(sockfd, buffer, strlen(buffer))) < 0 || (size_t) ret != strlen(buffer)) {
 			fprintf(stderr, "warning: \"write post to sockfd failed.\" errno=%d\n", errno);
 	    }
 	    total = output_char;
@@ -300,7 +294,7 @@ void ic_push()
 	    }
 	    for (i = 0; i < 1024; i++) /* empty the buffer */
 		result[i] = 0;
-	    if ((ret = read(sockfd, result, sizeof(result))) > 0) {
+	    if ((ret = read(sockfd, result, sizeof(result) - 1)) > 0) {
 		result[ret] = 0;
 		DEBUG fprintf(stderr, "received bytes=%d data=<%s>\n", ret, result);
 		sscanf(result, "HTTP/1.1 %d", &code);
@@ -313,7 +307,7 @@ void ic_push()
 		    fprintf(stderr, "code %d -->%s<--\n", code, result);
 	    }
 	    close(sockfd);
-	    sockfd = 0;
+	    sockfd = -1;
 	    DEBUG fprintf(stderr, "ic_push complete\n");
 	} else {
 	    DEBUG fprintf(stderr, "socket create failed\n");
