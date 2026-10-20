@@ -1879,7 +1879,9 @@ void test_clear_expired_frag_info()
     guint8 *p;
     InetFlow *flow1, *flow2, *flow3;
     InetFlowTable *table;
-    guint64 now = get_time_us();
+    /* The fragments are up to 50 s older than now, and the monotonic clock
+     * reads less than that on a machine that has just booted */
+    guint64 now = 100 * TIMESTAMP_RESOLUTION_US;
 
     setup_test();
     g_assert_nonnull((table = inet_flow_table_new(NULL)));
