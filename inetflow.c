@@ -782,7 +782,7 @@ static gboolean flow_parse_tcp(InetPacket * pkt, const guint8 * data, guint32 le
         set_anomaly(pkt, INET_ANOMALY_TCP_TRUNCATED);
     else {
         set_payload(pkt, data, length, hdr_len);
-        if ((flags & (INET_FLOW_VALIDATE | INET_FLOW_TCP_TRACK))
+        if ((flags & INET_FLOW_VALIDATE)
             && !parse_options(data + sizeof(tcp_hdr_t), hdr_len - sizeof(tcp_hdr_t), tcp_option, pkt))
             set_anomaly(pkt, INET_ANOMALY_TCP_OPT_INVALID);
     }
@@ -1777,6 +1777,9 @@ static gboolean packet_parse(InetPacket * pkt, const guint8 * frame, guint lengt
 {
     gboolean parsed;
 
+    /* TCP tracking needs the TCP options, and implies every other check */
+    if (flags & INET_FLOW_TCP_TRACK)
+        flags |= INET_FLOW_VALIDATE;
     memset(pkt, 0, sizeof(*pkt));
     if (flags & INET_FLOW_L2)
         parsed = flow_parse(pkt, frame, length, fragments, timestamp, flags);

@@ -3495,6 +3495,16 @@ void test_ipv4_options_invalid()
     opts[5] = 6;
     g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET | INET_FLOW_VALIDATE, &pkt));
     g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==, INET_ANOMALY_IPV4_OPT_INVALID);
+
+    /* INET_FLOW_TCP_TRACK implies INET_FLOW_VALIDATE */
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET | INET_FLOW_TCP_TRACK, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==, INET_ANOMALY_IPV4_OPT_INVALID);
+    g_assert_true(inet_packet_parse(test_buffer, len, INET_FLOW_L2 | INET_FLOW_TCP_TRACK, NULL, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==, INET_ANOMALY_IPV4_OPT_INVALID);
+
+    /* Without either flag the options are not checked */
+    g_assert_nonnull(inet_flow_get(table, test_buffer, len, 0, FLOW_GET, &pkt));
+    g_assert_cmphex(pkt.anomalies & INET_ANOMALY_IPV4_OPT_INVALID, ==, 0);
     inet_flow_table_free(table);
 }
 

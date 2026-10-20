@@ -565,7 +565,7 @@ linked flow, because the translation changes them.
 | `INET_FLOW_CREATE` | Create the flow if it does not exist |
 | `INET_FLOW_UPDATE` | Update the flow state, counters and expiry |
 | `INET_FLOW_VALIDATE` | Check IP and TCP options |
-| `INET_FLOW_TCP_TRACK` | Track TCP connections. This also checks options. |
+| `INET_FLOW_TCP_TRACK` | Track TCP connections. This implies `INET_FLOW_VALIDATE`. |
 
 ### Parsing without a table
 
