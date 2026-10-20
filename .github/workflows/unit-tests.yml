@@ -42,3 +42,26 @@ jobs:
           printf '#include <inetflow.h>\nint main(void)\n{\n    inet_flow_table_free(inet_flow_table_new());\n    return 0;\n}\n' > "$RUNNER_TEMP/app.c"
           cc -Wall -Werror -o "$RUNNER_TEMP/app" "$RUNNER_TEMP/app.c" $(pkg-config --cflags --libs inetflow)
           LD_LIBRARY_PATH="$(pkg-config --variable=libdir inetflow)" "$RUNNER_TEMP/app"
+
+  # AddressSanitizer and UndefinedBehaviorSanitizer find unaligned and out of
+  # bounds reads that valgrind does not, such as an unaligned load that works
+  # on x86 but traps on other CPUs
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libglib2.0-dev
+
+      - name: Build
+        run: >-
+          gcc -g -O1 -fno-omit-frame-pointer
+          -fsanitize=address,undefined -fno-sanitize-recover=all
+          $(pkg-config --cflags glib-2.0) -I. test.c -o unittest-asan
+          $(pkg-config --libs glib-2.0)
+
+      - name: Run unit tests
+        run: G_SLICE=always-malloc ASAN_OPTIONS=detect_leaks=1 ./unittest-asan

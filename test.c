@@ -3799,7 +3799,8 @@ static gboolean tcp_send(InetFlowTable * table, InetFlow ** flow, gboolean from_
     guint8 *tcp = build_hdr_ip(ip, tcp_eth_protocol, IP_PROTOCOL_TCP, !from_client);
     guint8 *p = build_tcp_segment(tcp, !from_client, flags, seq, ack, window, NULL);
 
-    memcpy(p, tcp_opts, tcp_opts_len);
+    if (tcp_opts_len)
+        memcpy(p, tcp_opts, tcp_opts_len);
     p += tcp_opts_len;
     ((tcp_hdr_t *) tcp)->flags = g_htons((((p - tcp) / 4) << 12) | flags);
     memset(p, 0x61, payload_len);

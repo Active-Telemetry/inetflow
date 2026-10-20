@@ -6,6 +6,7 @@ inetflow.pc
 gcov
 *.gcno
 unittest
+unittest-asan
 demo
 inetmon
 
